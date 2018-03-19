@@ -57,21 +57,28 @@ namespace VeeamTest
 
 
 
-        public static byte [] CompressDataChunk ( byte[] bytes )
+        public static byte [] CompressDataChunk ( byte[] bytes, long writePos=0 )
         {
-            return bytes;
+            //return bytes;
 
             using ( MemoryStream mStream = new MemoryStream() )
             {
                 using ( GZipStream compressionStream =
                     new GZipStream( mStream, CompressionMode.Compress, false ) )
                 {
-                    //compressionStream.Seek( seekIndex, SeekOrigin.Begin );
+                    //compressionStream.Position = writePos;
                     compressionStream.Write( bytes, 0, bytes.Length );
-                    //return compressionStream.GetBuffer();
-
+/*                    compressionStream.Flush();
+                    compressionStream.Close();*/
                 }
-                return mStream.GetBuffer();
+                //mStream.Write( bytes, 0, bytes.Length );
+                mStream.Flush();
+                //mStream.Close();
+                //byte[] returnBytes = mStream.ToArray();
+
+                return mStream.ToArray(); 
+                //return mStream.GetBuffer();
+
             }
 
         }
