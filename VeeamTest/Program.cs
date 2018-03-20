@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.Remoting.Messaging;
 using System.Security.AccessControl;
 using System.Text;
 using System.Threading;
@@ -23,7 +24,7 @@ namespace VeeamTest
         public static DataChunk[] dataChunks = new DataChunk[0];
         public static Queue<DataChunk> dataChunksQueue = new Queue< DataChunk >();
         //public static long[] dataChunkIndexes = new long[0];
-
+        public static List<long> readedIndexes = new List< long >();
             
         static DateTime startTime;
 
@@ -84,6 +85,8 @@ namespace VeeamTest
         }
 
 
+
+
         static void ReadFileThreaded( object threadData )
         {
             string pathToInputFile = ( string ) threadData;
@@ -111,7 +114,11 @@ namespace VeeamTest
 
             for ( int i = 0; i < threadCount; i++ )
             {
-                ReadFileThread gZipThread = new ReadFileThread(inputFileInfo);
+                ReadFileThread gZipThread = new ReadFileThread(
+                    inputFileInfo, 
+                    //i * (dataChunks.Length/threadCount) 
+                    threadCount, i
+                    );
                 gZipThreads.Add( gZipThread );
             }
 
@@ -167,31 +174,40 @@ namespace VeeamTest
                 long index = 0;
                 int bytesRead = 0;
                 long startReadPosition = 0;
-                //byte[] buffer;
+                List<long> writedIndexes = new List< long >();
 
 
                 //while dataChunkIndexes contains any data => read file at this index
                 while ( IsAnyDatachunkNotWriten()  )
                 {
-                    if ( (index = IsDataChunkIndexesHaveNotWritenData() ) == -1) continue;
+                    if ( (index = IsDataChunkIndexesHaveNotWritenData() ) == -1 ) continue;
+                    if( writedIndexes.Contains( index ) )
+                    {
+                        Console.WriteLine(" W Duplicate !!! " + index);
+                        continue;
+                    }
+                    writedIndexes.Add( index );
 
-                    Console.Write( " -W " + index );
 
-/*                    if( index>0 )
+                    if( index>0 )
                     {
                         var prevDataChunk = dataChunks[ index - 1 ];
                         prevDataChunk.byteData = new byte[0];
-                    }*/
+                    }
 
-                    var dataChunk = dataChunks[ index ];
-                    outFileStream.Position = dataChunks [ index ].seekIndex;
+                    DataChunk dataChunk = dataChunks[ index ];
+                    outFileStream.Position = dataChunk.seekIndex;
+                    dataChunk.currState = DataChunk.State.dataWritingNow;
 
                     //BitConverter.GetBytes( dataChunk.byteData.Length ).CopyTo( dataChunk.byteData, 4 );
                     outFileStream.Write( dataChunk.byteData, 0, dataChunk.byteData.Length );
-                    outFileStream.Flush();
+
 
                     dataChunk.currState = DataChunk.State.finished;
+                    Console.Write( " -W " + index );
+
                 }
+                Console.WriteLine(" Writed indexes count = " + writedIndexes .Count);
 
             }
 
@@ -207,6 +223,9 @@ namespace VeeamTest
             Console.ReadKey();
 
         }
+
+
+
 
 
         static void Compress(string pathToInputFile, string newFileName)
@@ -343,10 +362,12 @@ public class DataChunk
 {
     public byte[] byteData;
     public long seekIndex = -1;
+    public long nextBlockSeekIndex;
 
     public enum State
     {
         waiting,
+        dataReadingNow,
         dataReaded,
         dataWritingNow,
         finished

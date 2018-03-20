@@ -72,11 +72,11 @@ namespace VeeamTest
                     compressionStream.Close();*/
                 }
                 //mStream.Write( bytes, 0, bytes.Length );
-                mStream.Flush();
+                //mStream.Flush();
                 //mStream.Close();
-                //byte[] returnBytes = mStream.ToArray();
-
-                return mStream.ToArray(); 
+                byte[] returnBytes = mStream.ToArray();
+                //mStream.Seek( 0, SeekOrigin.Begin );
+                return returnBytes; 
                 //return mStream.GetBuffer();
 
             }
