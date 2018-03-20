@@ -1,30 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
-using System.Text;
 using System.Threading;
 
 namespace VeeamTest
 {
-    class ReadWrite_Async
+    public class CompressionThread
     {
+        private Thread thread;
+        private FileInfo inputFileInfo;
+        private int threadsCount;
+        private int threadIndex;
 
-    }
-
-
-    public class ReadFileThread
-    {
-        public Thread thread;
-        public FileInfo inputFileInfo;
-        public int threadsCount;
-        public int threadIndex;
-
-        public bool finished = false;
+        public bool Finished { get; set; }
 
 
-        public ReadFileThread ( FileInfo inputFileInfoToSet, int threadsCountToSet, int threadIndexToSet )
+
+        public CompressionThread ( FileInfo inputFileInfoToSet, int threadsCountToSet, int threadIndexToSet )
         {
             inputFileInfo = inputFileInfoToSet;
             this.threadsCount = threadsCountToSet;
@@ -40,199 +33,113 @@ namespace VeeamTest
         {
             using ( var readFileStream = new FileStream( inputFileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
-                long index = 0;
+                //long index = 0;
                 int bytesRead = 0;
                 long startReadPosition = 0;
-                byte[] buffer;
+                byte[] buffer = new byte [ Program.BufferSize ]; ;
 
 
+                #region ForLoop
 
-                //while dataChunkIndexes contains any data => read file at this index
-                while ( IsAnyDatachunkNotReaden() )
+                for ( int i = threadIndex; i < Program.dataBlocks.Length; i += threadsCount )
                 {
-                    if(( index = IsDataChunkIndexesHaveNotReadenData() ) == -1 ) continue;
-                        //Console.Write( " -R " + index );
-
-                    buffer = new byte [ Program.BufferSize ];
-                    startReadPosition = Program.dataChunks [ index ].seekIndex;// index * Program.BufferSize;
+                    startReadPosition = i * buffer.Length;
                     readFileStream.Position = startReadPosition;
+                    bytesRead = readFileStream.Read( buffer, 0, buffer.Length ) ;
 
-
-                    if ( readFileStream.CanRead &&
-                        ( bytesRead = readFileStream.Read( buffer, 0, buffer.Length ) ) > 0 )
+                    //if reach end file and buffer filled with nulls
+                    if ( bytesRead < buffer.Length )
                     {
-                        if(index==0 
-                            || (index>0 
-                            && Program.dataChunks[ index - 1 ] != null)
-                            && Program.dataChunks [ index - 1 ].currState!=DataChunk.State.waiting 
-                            )
-                        {
-                            //if reach end file and buffer filled with nulls
-                            if ( bytesRead < buffer.Length )
-                            {
-                                buffer = buffer.Take( bytesRead ).ToArray();
-                            }
-
-
-                            var writePos = index > 0 
-                                ? Program.dataChunks [ index - 1 ].seekIndex + Program.dataChunks [ index - 1 ].byteData.Length
-                                //? Program.dataChunks [ index - 1 ].nextBlockSeekIndex
-                                : 0;
-
-                            var newDataChunk = Program.dataChunks[ index ];
-                            newDataChunk.currState = DataChunk.State.dataReadingNow;
-
-                            if ( newDataChunk != null )
-                            {
-                                newDataChunk.byteData = CommonUtils.CompressDataChunk( buffer );
-                                newDataChunk.seekIndex = writePos;
-                                //newDataChunk.nextBlockSeekIndex = newDataChunk.seekIndex + bytesRead;
-                                newDataChunk.currState = DataChunk.State.dataReaded;
-
-                                //Console.Write( " -R " + index );
-
-
-                                if( Program.readedIndexes.Contains( index ) )
-                                {
-                                    Console.WriteLine( " -Read duplicate !!! " + index );
-                                }
-                                else
-                                {
-                                    Program.readedIndexes.Add( index );
-                                }
-                            }
-                        }
-                        
-
-
-
+                        buffer = buffer.Take( bytesRead ).ToArray();
                     }
+
+                    var newDataChunk = Program.dataBlocks[ i ];
+                    newDataChunk.byteData = CommonUtils.CompressDataChunk( buffer );
+
+/*                    List< byte > bytes = newDataChunk.byteData.ToList();
+                    bytes.InsertRange( 0, new byte [ 800 ] );
+                    newDataChunk.byteData = bytes.ToArray();*/
+
+                    newDataChunk.currState = DataBlock.State.dataReaded;
+
+                    //Console.Write( " -R " + i );
                 }
+                #endregion
 
-                finished = true;
+
+                Finished = true;
+                thread.Abort();
             }
         }
 
-        bool IsAnyDatachunkNotReaden ()
-        {
-            for ( var i = threadIndex; i < Program.dataChunks.Length; i += threadsCount )
-            {
-                DataChunk dataChunk = Program.dataChunks[ i ];
-                if ( dataChunk == null || dataChunk.currState == DataChunk.State.waiting ) return true;
-            }
-            return false;
-        }
-
-        long IsDataChunkIndexesHaveNotReadenData ()
-        {
-            for ( int i = threadIndex; i < Program.dataChunks.Length; i+=threadsCount )
-            {
-                var dc = Program.dataChunks[ i ];
-                if ( dc != null && dc.byteData == null 
-                    //&& dc.currState == DataChunk.State.waiting 
-                    )
-                {
-                    if ( i > 0 )
-                    {
-                        var dcPrev = Program.dataChunks[ i - 1 ];
-                        if ( dcPrev != null 
-                            && dcPrev.byteData != null 
-                            //&& dcPrev.currState != DataChunk.State.waiting 
-                            )
-                        {
-                            return i;
-                        }
-                    }
-                    else
-                    {
-                        return i;
-                    }
-                }
-            }
-
-            return -1;
-        }
     }
 
-    public class CompressAndWriteFileThread
+
+    public class ReadCompressedFileHeadersThread
     {
-        public Thread thread;
-        public FileInfo outFileInfo;
+        private Thread thread;
+        private FileInfo fileToDecompress;
+        private int threadsCount;
+        private int threadIndex;
 
-        public bool finished = false;
+        public bool Finished { get; set; }
 
 
-        public CompressAndWriteFileThread ( FileInfo outFileInfoToSet )
+
+        public ReadCompressedFileHeadersThread( FileInfo fileToDecompress, int threadsCount, int threadIndex )
         {
-            outFileInfo = outFileInfoToSet;
+            this.fileToDecompress = fileToDecompress;
+            this.threadIndex = threadIndex;
+            this.threadsCount = threadsCount;
 
             thread = new Thread( DoWork );
             thread.Start();
         }
 
 
-
-        void DoWork ()
+        void DoWork()
         {
-            if( !File.Exists( outFileInfo.FullName ) )
+            using ( FileStream originalFileStream = new FileStream( fileToDecompress.FullName, 
+                FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
-                var fc = File.Create( outFileInfo.FullName );
-                fc.Close();
-            }
+                byte[] buffer2 = new byte[4];
+                long iTemp = 0;
+                long iteartionCount = 0;
+
+                long blockSize = originalFileStream.Length / threadsCount;
+                long initialPos = blockSize * threadIndex;
+                //long stepForward = threadsCount * 4;
 
 
-
-            using ( FileStream outFileStream = File.OpenWrite( outFileInfo.FullName ) )
-            {
-                long index = 0;
-                int bytesRead = 0;
-                long startReadPosition = 0;
-                //byte[] buffer;
-
-
-
-                //while dataChunkIndexes contains any data => read file at this index
-                while ( ( index = IsDataChunkIndexesHaveNotWritenData() ) > -1 )
+                for ( long i = initialPos; i < initialPos+blockSize; i ++ )
                 {
-                    Console.Write( " -W " + index );
+                    iTemp = i;
+                    iteartionCount++;
+                    originalFileStream.Position = i;
 
-                    outFileStream.Position = Program.dataChunks [ index ].seekIndex;
-
-                    using ( GZipStream compressionStream = new GZipStream( outFileStream, CompressionMode.Compress ) )
+                    //read compressed file per byte fro gzip headers
+                    
+                    originalFileStream.Read( buffer2, 0, buffer2.Length );
+                    if (    buffer2 [ 0 ] == 0x1F
+                         && buffer2 [ 1 ] == 0x8B
+                         && buffer2 [ 2 ] == 0x08
+                         && buffer2 [ 3 ] == 0x00 )
                     {
-                        var dataChunk = Program.dataChunks[ index ];
-                        compressionStream.Write( dataChunk.byteData, 0, dataChunk.byteData.Length );
+                        //Program.headersFound++;
+                        //Program.comprssedFileHeadersQueue.Enqueue( i );
+                        Program.compressedBlocksheadersIndexList.Add( i );
+                        Program.compressedBlocksheadersIndexList = 
+                            Program.compressedBlocksheadersIndexList.OrderBy( v => v ).ToList();
+
+                        Console.WriteLine( " Thread " + threadIndex +"   "  + iTemp + " R " 
+                            + Program.compressedBlocksheadersIndexList .Count);
                     }
                 }
+                Console.WriteLine(" Thread "+threadIndex + " Finished at " + iTemp + " IterationsCount = "+iteartionCount );
+                Finished = true;
 
-                finished = true;
             }
-        }
-
-
-        long IsDataChunkIndexesHaveNotWritenData ()
-        {
-            for ( int i = 0; i < Program.dataChunks.Length; i++ )
-            {
-                var dc = Program.dataChunks[ i ];
-                if ( dc != null && dc.currState == DataChunk.State.dataReaded )
-                {
-                    if ( i > 0 )
-                    {
-                        var dcPrev = Program.dataChunks[ i - 1 ];
-                        if ( dcPrev != null && dc.currState == DataChunk.State.finished )
-                        {
-                            return i;
-                        }
-                    }
-                    else
-                    {
-                        return i;
-                    }
-                }
-            }
-
-            return -1;
         }
     }
+
 }

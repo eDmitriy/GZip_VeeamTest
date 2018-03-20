@@ -3,30 +3,35 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Runtime.Remoting.Messaging;
-using System.Security.AccessControl;
-using System.Text;
 using System.Threading;
-using Microsoft.Win32.SafeHandles;
-using VeeamTest;
+
 
 
 namespace VeeamTest
 {
     class Program
     {
-        public static int threadCount = 4;
+        #region Vars
+
+        public static int threadCount = 20;
         const long buffSizeMult = 1024;
         public static long BufferSize = buffSizeMult*buffSizeMult;//1024 * 1024;
 
+        public static DataBlock[] dataBlocks = new DataBlock[0];
+/*        public static Queue<DataBlock> queue_Read = new Queue< DataBlock >();
+        public static Queue<DataBlock> queue_Write = new Queue< DataBlock >();*/
 
+        //public static List<long> readedIndexes = new List< long >();
+        //public static List<long> writedIndexes = new List< long >();
+        //public static int writeBlockTotalCount = 0;
 
-        public static DataChunk[] dataChunks = new DataChunk[0];
-        public static Queue<DataChunk> dataChunksQueue = new Queue< DataChunk >();
-        //public static long[] dataChunkIndexes = new long[0];
-        public static List<long> readedIndexes = new List< long >();
-            
+        public static Queue<long> comprssedFileHeadersQueue = new Queue< long >();
+        public static List<long> compressedBlocksheadersIndexList = new List< long >();
+        public static int headersFound = 0;
+
         static DateTime startTime;
+
+        #endregion
 
 
 
@@ -96,13 +101,11 @@ namespace VeeamTest
 
             using ( var outFileStream = new FileStream( pathToInputFile, FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
-                dataChunks = new DataChunk [( outFileStream.Length / BufferSize ) + 1];
-                for ( int i = 0; i < dataChunks.Length; i++ )
+                var writeBlockTotalCount = ( int )( outFileStream.Length / BufferSize ) + 1;
+                dataBlocks = new DataBlock [ writeBlockTotalCount ];
+                for ( int i = 0; i < dataBlocks.Length; i++ )
                 {
-                    dataChunks [ i ] = new DataChunk()
-                    {
-                        seekIndex = i * BufferSize
-                    };
+                    dataBlocks [ i ] = new DataBlock();
                 }
             }
 
@@ -110,11 +113,11 @@ namespace VeeamTest
 
             #region InitThreads-Read
 
-            List<ReadFileThread> gZipThreads = new List< ReadFileThread >();
+            List<CompressionThread> gZipThreads = new List< CompressionThread >();
 
             for ( int i = 0; i < threadCount; i++ )
             {
-                ReadFileThread gZipThread = new ReadFileThread(
+                CompressionThread gZipThread = new CompressionThread(
                     inputFileInfo, 
                     //i * (dataChunks.Length/threadCount) 
                     threadCount, i
@@ -124,10 +127,13 @@ namespace VeeamTest
 
             #endregion
 
-            while( gZipThreads.Any(v=>!v.finished) )
+            while( gZipThreads.Any(v=>!v.Finished) )
             {
                 //wait for threads
             }
+            gZipThreads.Clear();
+            GC.Collect();
+
 
             Console.WriteLine( "" );
             Console.WriteLine( " Read END" );
@@ -138,27 +144,10 @@ namespace VeeamTest
             string newFileName = ( string ) threadData;
             FileInfo outFileInfo = new FileInfo( newFileName );
 
-            while ( dataChunks==null || dataChunks.Length<1 )
+            while ( dataBlocks==null || dataBlocks.Length<1 )
             {
                 //wait for chunks creation
             }
-
-
-
-            #region InitThreads-Write
-
-/*            List<CompressAndWriteFileThread> gZipThreads = new List< CompressAndWriteFileThread >();
-
-            for ( int i = 0; i < threadCount; i++ )
-            {
-                CompressAndWriteFileThread gZipThread = new CompressAndWriteFileThread(outFileInfo);
-                gZipThreads.Add( gZipThread );
-            }
-            while ( gZipThreads.Any( v => !v.finished ) )
-            {
-                //wait for threads
-            }*/
-            #endregion
 
 
             if( File.Exists( outFileInfo.FullName ) )
@@ -169,46 +158,33 @@ namespace VeeamTest
             //using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
             using ( FileStream outFileStream = new FileStream( outFileInfo.FullName, FileMode.Append, FileAccess.Write ) )
             {
-                outFileStream.Lock( 0, dataChunks.Length*BufferSize );
+                outFileStream.Lock( 0, dataBlocks.Length*BufferSize );
 
                 long index = 0;
                 int bytesRead = 0;
                 long startReadPosition = 0;
-                List<long> writedIndexes = new List< long >();
 
 
-                //while dataChunkIndexes contains any data => read file at this index
-                while ( IsAnyDatachunkNotWriten()  )
+                //for every block do write
+                for ( int i = 0; i < /*writeBlockTotalCount*/dataBlocks.Length; i++ )
                 {
-                    if ( (index = IsDataChunkIndexesHaveNotWritenData() ) == -1 ) continue;
-                    if( writedIndexes.Contains( index ) )
-                    {
-                        Console.WriteLine(" W Duplicate !!! " + index);
-                        continue;
-                    }
-                    writedIndexes.Add( index );
+                    index = i;
+
+                    while( dataBlocks [ i ]==null || dataBlocks [i].byteData==null ){/* wait for chunkData */}
 
 
-                    if( index>0 )
-                    {
-                        var prevDataChunk = dataChunks[ index - 1 ];
-                        prevDataChunk.byteData = new byte[0];
-                    }
 
-                    DataChunk dataChunk = dataChunks[ index ];
-                    outFileStream.Position = dataChunk.seekIndex;
-                    dataChunk.currState = DataChunk.State.dataWritingNow;
+                    DataBlock dataChunk = dataBlocks[ index ];
+                    dataChunk.currState = DataBlock.State.dataWritingNow;
 
                     //BitConverter.GetBytes( dataChunk.byteData.Length ).CopyTo( dataChunk.byteData, 4 );
                     outFileStream.Write( dataChunk.byteData, 0, dataChunk.byteData.Length );
 
 
-                    dataChunk.currState = DataChunk.State.finished;
+                    dataChunk.currState = DataBlock.State.finished;
+                    dataChunk.byteData=new byte[0];
                     Console.Write( " -W " + index );
-
                 }
-                Console.WriteLine(" Writed indexes count = " + writedIndexes .Count);
-
             }
 
 
@@ -228,69 +204,6 @@ namespace VeeamTest
 
 
 
-        static void Compress(string pathToInputFile, string newFileName)
-        {
-            Console.WriteLine("Compress");
-
-            using ( var fStream = new FileStream( pathToInputFile, FileMode.Open, FileAccess.Read, FileShare.Read ) )
-            {
-                var fileInfo = new FileInfo( pathToInputFile );
-
-
-                if ( ( File.GetAttributes( fileInfo.FullName ) &
-                        FileAttributes.Hidden ) != FileAttributes.Hidden & fileInfo.Extension != ".gz" )
-                {
-                    using ( FileStream compressedFileStream = File.Create( newFileName/*fStream.Name + ".gz"*/ ) )
-                    {
-
-                        using ( GZipStream compressionStream = new GZipStream( compressedFileStream,
-                            CompressionMode.Compress, false ) )
-                        {
-                            //fStream.CopyTo( compressionStream );
-                            List<Thread> threads = new List< Thread >();
-                            int bytesRead = 0;
-                            byte[] buffer = new byte[0];
-
-
-                            while ( true/*buffer==null || buffer.Length==0 */ )
-                            {
-                                //buffer = new byte[BufferSize];
-                                if( buffer.Length == 0 ) {
-                                    buffer = new byte [ BufferSize ];
-                                    if ( (bytesRead = fStream.Read( buffer, 0, buffer.Length ) ) == 0) break; //exit
-                                }
-
-
-                                
-  /*                              if ( threads.Count( v => v.IsAlive ) < threadCount )
-                                {
-                                    Thread thread = new Thread( () =>
-                                    {
-                                        compressionStream.WriteBlock( bytesRead/threadCount, ref  buffer );
-                                    } );
-                                    thread.Start();
-
-                                    threads.Add( thread );
-                                }*/
-                            }
-
-
-                        }
-                    }
-
-
-                    FileInfo info = new FileInfo(fileInfo.Directory + "\\" + newFileName/*fileInfo.Name + ".gz"*/);
-                    Console.WriteLine( "\nCompressed {0} from {1} to {2} bytes. \nComprRate = {3} X",
-                        fileInfo.Name, fileInfo.Length.ToString(), info.Length.ToString()
-                        ,( (float)fileInfo.Length / (float)info.Length) );
-                }
-
-            }
-        }
-
-
-
-
 
         static void Decompress ( string fileName, string newFileName )
         {
@@ -300,57 +213,63 @@ namespace VeeamTest
             {
                 using ( FileStream originalFileStream = fileToDecompress.OpenRead() )
                 {
-                    //string currentFileName = fileToDecompress.FullName;
-                    //string newFileName = currentFileName.Remove(currentFileName.Length - fileToDecompress.Extension.Length);
-
-                    using ( FileStream decompressedFileStream = File.Create( newFileName ) )
+                    if ( File.Exists( newFileName ) )
                     {
-                        using ( GZipStream decompressionStream =
-                            new GZipStream( originalFileStream, CompressionMode.Decompress, false ) )
+                        File.Delete( newFileName );
+                    }
+
+
+                    using ( FileStream decompressedFileStream = new FileStream( newFileName, FileMode.Append, FileAccess.Write ) )
+                    {
+                        long streamPos = 0;
+                        long prevBytesRead = -1;
+                        var bytesRead = 0;
+                        byte[] buffer = new byte[BufferSize];
+
+
+                        List< ReadCompressedFileHeadersThread > readThreadsList = new List< ReadCompressedFileHeadersThread >();
+
+
+
+                        //Start threaded headers info reading of compressed blocks in file 
+                        for ( int i = 0; i < threadCount; i++ )
                         {
-                            decompressionStream.CopyTo( decompressedFileStream );
-                            Console.WriteLine( "Decompressed: {0}", fileToDecompress.Name );
+                            ReadCompressedFileHeadersThread readCompressedFileHeaders =
+                                new ReadCompressedFileHeadersThread(fileToDecompress, threadCount, i );
+                            readThreadsList.Add( readCompressedFileHeaders );
+                        }
+
+
+
+                        //decompress
+                        while ( readThreadsList.Any(v=> v.Finished==false) )
+                        {
+                            if( compressedBlocksheadersIndexList.Count==0 ) continue;
+                            //if(comprssedFileHeadersQueue.Count==0) continue;
+
+                            var newPos = compressedBlocksheadersIndexList[ 0 ];
+                            compressedBlocksheadersIndexList.RemoveAt( 0 );
+                            //var newPos = comprssedFileHeadersQueue.Dequeue();
+                            originalFileStream.Position = newPos;
+
+
+                            using ( GZipStream decompressionStream =
+                                new GZipStream( originalFileStream, CompressionMode.Decompress, true ) )
+                            {
+                                while ( ( bytesRead = decompressionStream.Read( buffer, 0, buffer.Length ) ) > 0 )
+                                {
+                                    decompressedFileStream.Write( buffer, 0, bytesRead );
+                                }
+
+                                Console.WriteLine( "decStr pos = " + originalFileStream.Position 
+                                    + " " + decompressedFileStream .Position 
+                                    + " " + decompressedFileStream.Length);
+                            }
                         }
                     }
+                    Console.WriteLine( "Decompressed: {0}", fileToDecompress.Name );
                 }
             }
-        }
-
-
-
-
-        static bool IsAnyDatachunkNotWriten()
-        {
-            for ( var i = 0; i < dataChunks.Length; i++ )
-            {
-                DataChunk dataChunk = dataChunks[ i ];
-                if( dataChunk == null || dataChunk.currState != DataChunk.State.finished ) return true;
-            }
-            return false;
-        }
-        static long IsDataChunkIndexesHaveNotWritenData ()
-        {
-            for ( int i = 0; i < dataChunks.Length; i++ )
-            {
-                var dc = dataChunks[ i ];
-                if ( dc != null && dc.currState == DataChunk.State.dataReaded )
-                {
-                    if ( i > 0 )
-                    {
-                        var dcPrev = dataChunks[ i - 1 ];
-                        if ( dcPrev != null && dcPrev.currState == DataChunk.State.finished )
-                        {
-                            return i;
-                        }
-                    }
-                    else
-                    {
-                        return i;
-                    }
-                }
-            }
-
-            return -1;
         }
 
 
@@ -358,11 +277,10 @@ namespace VeeamTest
 }
 
 
-public class DataChunk
+public class DataBlock
 {
     public byte[] byteData;
-    public long seekIndex = -1;
-    public long nextBlockSeekIndex;
+    //public long seekIndex = -1;
 
     public enum State
     {
