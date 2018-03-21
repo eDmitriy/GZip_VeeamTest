@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 
@@ -33,7 +34,6 @@ namespace VeeamTest
         {
             using ( var readFileStream = new FileStream( inputFileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
-                //long index = 0;
                 int bytesRead = 0;
                 long startReadPosition = 0;
                 byte[] buffer = new byte [ Program.BufferSize ]; ;
@@ -54,13 +54,7 @@ namespace VeeamTest
                     }
 
                     var newDataChunk = Program.dataBlocks[ i ];
-                    newDataChunk.byteData = CommonUtils.CompressDataChunk( buffer );
-
-/*                    List< byte > bytes = newDataChunk.byteData.ToList();
-                    bytes.InsertRange( 0, new byte [ 800 ] );
-                    newDataChunk.byteData = bytes.ToArray();*/
-
-                    //newDataChunk.currState = DataBlock.State.dataReaded;
+                    newDataChunk.byteData = CommonUtils.CompressDataBlock( buffer , CompressionMode.Compress);
 
                     //Console.Write( " -R " + i );
                 }
@@ -82,7 +76,8 @@ namespace VeeamTest
         private int threadsCount;
         private int threadIndex;
 
-        public  Queue<long> compresedBlocksQueue = new Queue< long >();
+        //public  Queue<long> compresedBlocksQueue = new Queue< long >();
+        public Queue<DataBlock> dataBlocksQueue = new Queue< DataBlock >();
 
         public bool Finished { get; set; }
 
@@ -104,49 +99,88 @@ namespace VeeamTest
             using ( FileStream originalFileStream = new FileStream( fileToDecompress.FullName, 
                 FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
-                byte[] buffer2 = new byte[4];
                 long iTemp = 0;
                 long iteartionCount = 0;
                 int totalBlocksFound = 0;
 
                 long blockSize = originalFileStream.Length / threadsCount;
                 long initialPos = blockSize * threadIndex;
-                //long stepForward = threadsCount * 4;
 
-                byte[] bufferAllFile = new byte[blockSize];
+                byte[] bufferGZipHeader = new byte[4];
+                byte[] bufferCompressedFilePart = new byte[blockSize];
+                byte[] bufferGZipDecompression = new byte[Program.BufferSize];
+
+                var bytesRead = 0;
+
+
+                //read compressed file part
                 originalFileStream.Position = initialPos;
-
-                originalFileStream.Read( bufferAllFile, 0, bufferAllFile.Length );
+                originalFileStream.Read( bufferCompressedFilePart, 0, bufferCompressedFilePart.Length );
                 
 
-                for ( long i = 0; i < blockSize; i +=1 )
+                for ( long i = 0; i < blockSize; i ++ )
                 {
                     iTemp = i;
                     iteartionCount++;
 
+                    //read header bytes from file bytes array. Continously
+                    #region Read Header
+
                     for ( int j = 0; j < 4; j++ )
                     {
-                        if( bufferAllFile.Length > i + j ) buffer2[ j ] = bufferAllFile[ i + j ];
+                        if( blockSize > i + j ) //check for i+j < bufferAllFile.Lenght
+                        {
+                            bufferGZipHeader[ j ] = bufferCompressedFilePart[ i + j ];
+                        }
                     }
+
+                    #endregion
                     
 
-                    //read compressed file per byte fro gzip headers
-                    if (    buffer2 [ 0 ] == 0x1F
-                         && buffer2 [ 1 ] == 0x8B
-                         && buffer2 [ 2 ] == 0x08
-                         && buffer2 [ 3 ] == 0x00 )
+                    //Check header and if true => decompress block
+                    if (    bufferGZipHeader [ 0 ] == 0x1F
+                         && bufferGZipHeader [ 1 ] == 0x8B
+                         && bufferGZipHeader [ 2 ] == 0x08
+                         && bufferGZipHeader [ 3 ] == 0x00 )
                     {
-                        compresedBlocksQueue.Enqueue( i+ initialPos );
+                        DataBlock newDataBlock = new DataBlock();
+
+                        originalFileStream.Position = i + initialPos;
+
+                        #region Decompress
+
+                        using ( MemoryStream mStream = new MemoryStream() )
+                        {
+                            using ( GZipStream gZipStream = new GZipStream(
+                                originalFileStream, CompressionMode.Decompress, true) )
+                            {
+                                while( ( bytesRead = gZipStream.Read( bufferGZipDecompression, 0,
+                                           bufferGZipDecompression.Length ) ) > 0 )
+                                {
+                                    mStream.Write( bufferGZipDecompression, 0, bytesRead );
+                                }
+                                gZipStream.Close();
+                                //i += ( bytesRead - 1 );
+                            }
+                            newDataBlock.byteData = mStream.ToArray();
+                            mStream.Close();
+                        }
+
+                        #endregion
+
+                        //compresedBlocksQueue.Enqueue( i+ initialPos );
+                        dataBlocksQueue.Enqueue( newDataBlock);
                         totalBlocksFound++;
 
-                        Console.WriteLine( " Thread " + threadIndex +"   "  + iTemp + " R " 
-                            + totalBlocksFound );
+                        Console.WriteLine( " Thread " + threadIndex +"   "  + iTemp + " R " + totalBlocksFound );
                     }
                 }
                 Console.WriteLine(" Thread "+threadIndex + " Finished at " + iTemp + " BLOCKS Found = "+ totalBlocksFound );
                 Finished = true;
 
             }
+
+
         }
     }
 

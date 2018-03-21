@@ -31,27 +31,19 @@ namespace VeeamTest
 
 
 
-        public static byte [] CompressDataChunk ( byte[] bytes, long writePos=0 )
+        public static byte [] CompressDataBlock ( byte[] bytes, CompressionMode compressionMode )
         {
             //return bytes;
 
             using ( MemoryStream mStream = new MemoryStream() )
             {
-                using ( GZipStream compressionStream =
-                    new GZipStream( mStream, CompressionMode.Compress, false ) )
+                using ( GZipStream gZipStream = new GZipStream( mStream, compressionMode, false ) )
                 {
-                    compressionStream.Write( bytes, 0, bytes.Length );
+                    gZipStream.Write( bytes, 0, bytes.Length );
                 }
-
-                //byte[] returnBytes = mStream.ToArray();
                 return mStream.ToArray(); 
-                //return mStream.GetBuffer();
-
             }
-
         }
-
-
 
     }
 }
