@@ -14,19 +14,9 @@ namespace VeeamTest
         #region Vars
 
         public static int threadCount = 20;
-        const long buffSizeMult = 1024;
-        public static long BufferSize = buffSizeMult*buffSizeMult;//1024 * 1024;
+        public static long BufferSize = 1024*1024;
 
         public static DataBlock[] dataBlocks = new DataBlock[0];
-/*        public static Queue<DataBlock> queue_Read = new Queue< DataBlock >();
-        public static Queue<DataBlock> queue_Write = new Queue< DataBlock >();*/
-
-        //public static List<long> readedIndexes = new List< long >();
-        //public static List<long> writedIndexes = new List< long >();
-        //public static int writeBlockTotalCount = 0;
-
-        public static Queue<long> comprssedFileHeadersQueue = new Queue< long >();
-        public static List<long> compressedBlocksheadersIndexList = new List< long >();
         public static int headersFound = 0;
 
         static DateTime startTime;
@@ -150,13 +140,13 @@ namespace VeeamTest
             }
 
 
-            if( File.Exists( outFileInfo.FullName ) )
+/*            if( File.Exists( outFileInfo.FullName ) )
             {
                 File.Delete( outFileInfo.FullName );
-            }
+            }*/
 
-            //using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
-            using ( FileStream outFileStream = new FileStream( outFileInfo.FullName, FileMode.Append, FileAccess.Write ) )
+            using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
+            //using ( FileStream outFileStream = new FileStream( outFileInfo.FullName, FileMode.Append, FileAccess.Write ) )
             {
                 outFileStream.Lock( 0, dataBlocks.Length*BufferSize );
 
@@ -166,22 +156,15 @@ namespace VeeamTest
 
 
                 //for every block do write
-                for ( int i = 0; i < /*writeBlockTotalCount*/dataBlocks.Length; i++ )
+                for ( int i = 0; i < dataBlocks.Length; i++ )
                 {
                     index = i;
 
                     while( dataBlocks [ i ]==null || dataBlocks [i].byteData==null ){/* wait for chunkData */}
-
-
-
+                    
                     DataBlock dataChunk = dataBlocks[ index ];
-                    dataChunk.currState = DataBlock.State.dataWritingNow;
-
-                    //BitConverter.GetBytes( dataChunk.byteData.Length ).CopyTo( dataChunk.byteData, 4 );
                     outFileStream.Write( dataChunk.byteData, 0, dataChunk.byteData.Length );
-
-
-                    dataChunk.currState = DataBlock.State.finished;
+                    
                     dataChunk.byteData=new byte[0];
                     Console.Write( " -W " + index );
                 }
@@ -239,17 +222,24 @@ namespace VeeamTest
                             readThreadsList.Add( readCompressedFileHeaders );
                         }
 
-
+                        int threadsIndex = 0;
+                        int writeCounter = 1;
 
                         //decompress
-                        while ( readThreadsList.Any(v=> v.Finished==false) )
+                        while ( readThreadsList.Any(v=> v.Finished==false || v.compresedBlocksQueue.Count>0) )
                         {
-                            if( compressedBlocksheadersIndexList.Count==0 ) continue;
-                            //if(comprssedFileHeadersQueue.Count==0) continue;
+                            long newPos = 0;
+                            var thread = readThreadsList[ threadsIndex ];
+                            if(thread==null) continue;
+                            if( thread.Finished && thread.compresedBlocksQueue.Count==0)
+                            {
+                                threadsIndex++;
+                                continue;
+                            }
+                            if( thread.compresedBlocksQueue .Count==0) continue;
 
-                            var newPos = compressedBlocksheadersIndexList[ 0 ];
-                            compressedBlocksheadersIndexList.RemoveAt( 0 );
-                            //var newPos = comprssedFileHeadersQueue.Dequeue();
+
+                            newPos = thread.compresedBlocksQueue.Dequeue();
                             originalFileStream.Position = newPos;
 
 
@@ -262,8 +252,7 @@ namespace VeeamTest
                                 }
 
                                 Console.WriteLine( "decStr pos = " + originalFileStream.Position 
-                                    + " " + decompressedFileStream .Position 
-                                    + " " + decompressedFileStream.Length);
+                                    + " counter = " + writeCounter++);
                             }
                         }
                     }
@@ -282,7 +271,7 @@ public class DataBlock
     public byte[] byteData;
     //public long seekIndex = -1;
 
-    public enum State
+/*    public enum State
     {
         waiting,
         dataReadingNow,
@@ -291,5 +280,5 @@ public class DataBlock
         finished
     }
 
-    public State currState;
+    public State currState;*/
 }

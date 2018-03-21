@@ -60,7 +60,7 @@ namespace VeeamTest
                     bytes.InsertRange( 0, new byte [ 800 ] );
                     newDataChunk.byteData = bytes.ToArray();*/
 
-                    newDataChunk.currState = DataBlock.State.dataReaded;
+                    //newDataChunk.currState = DataBlock.State.dataReaded;
 
                     //Console.Write( " -R " + i );
                 }
@@ -81,6 +81,8 @@ namespace VeeamTest
         private FileInfo fileToDecompress;
         private int threadsCount;
         private int threadIndex;
+
+        public  Queue<long> compresedBlocksQueue = new Queue< long >();
 
         public bool Finished { get; set; }
 
@@ -105,37 +107,43 @@ namespace VeeamTest
                 byte[] buffer2 = new byte[4];
                 long iTemp = 0;
                 long iteartionCount = 0;
+                int totalBlocksFound = 0;
 
                 long blockSize = originalFileStream.Length / threadsCount;
                 long initialPos = blockSize * threadIndex;
                 //long stepForward = threadsCount * 4;
 
+                byte[] bufferAllFile = new byte[blockSize];
+                originalFileStream.Position = initialPos;
 
-                for ( long i = initialPos; i < initialPos+blockSize; i ++ )
+                originalFileStream.Read( bufferAllFile, 0, bufferAllFile.Length );
+                
+
+                for ( long i = 0; i < blockSize; i +=1 )
                 {
                     iTemp = i;
                     iteartionCount++;
-                    originalFileStream.Position = i;
+
+                    for ( int j = 0; j < 4; j++ )
+                    {
+                        if( bufferAllFile.Length > i + j ) buffer2[ j ] = bufferAllFile[ i + j ];
+                    }
+                    
 
                     //read compressed file per byte fro gzip headers
-                    
-                    originalFileStream.Read( buffer2, 0, buffer2.Length );
                     if (    buffer2 [ 0 ] == 0x1F
                          && buffer2 [ 1 ] == 0x8B
                          && buffer2 [ 2 ] == 0x08
                          && buffer2 [ 3 ] == 0x00 )
                     {
-                        //Program.headersFound++;
-                        //Program.comprssedFileHeadersQueue.Enqueue( i );
-                        Program.compressedBlocksheadersIndexList.Add( i );
-                        Program.compressedBlocksheadersIndexList = 
-                            Program.compressedBlocksheadersIndexList.OrderBy( v => v ).ToList();
+                        compresedBlocksQueue.Enqueue( i+ initialPos );
+                        totalBlocksFound++;
 
                         Console.WriteLine( " Thread " + threadIndex +"   "  + iTemp + " R " 
-                            + Program.compressedBlocksheadersIndexList .Count);
+                            + totalBlocksFound );
                     }
                 }
-                Console.WriteLine(" Thread "+threadIndex + " Finished at " + iTemp + " IterationsCount = "+iteartionCount );
+                Console.WriteLine(" Thread "+threadIndex + " Finished at " + iTemp + " BLOCKS Found = "+ totalBlocksFound );
                 Finished = true;
 
             }
