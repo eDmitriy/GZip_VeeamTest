@@ -25,6 +25,7 @@ namespace VeeamTest
             this.threadIndex = threadIndexToSet;
 
             thread = new Thread( DoWork );
+            thread.IsBackground = true;
             thread.Start();
         }
 
@@ -62,7 +63,7 @@ namespace VeeamTest
 
 
                 Finished = true;
-                thread.Abort();
+                //thread.Abort();
             }
         }
 
@@ -71,15 +72,30 @@ namespace VeeamTest
 
     public class ReadCompressedFileHeadersThread
     {
+        private const ulong MAX_MEMORY_FOR_SAVED_BLOCKS = 1024 * 1024 * 200;
+        
         private Thread thread;
         private FileInfo fileToDecompress;
         private int threadsCount;
         private int threadIndex;
 
         //public  Queue<long> compresedBlocksQueue = new Queue< long >();
-        public Queue<DataBlock> dataBlocksQueue = new Queue< DataBlock >();
+        //public Queue<DataBlock> dataBlocksQueue = new Queue< DataBlock >();
+        public QueueManager queueManager = new QueueManager();
 
         public bool Finished { get; set; }
+/*
+        public enum State
+        {
+            waiting,
+            working,
+            finished
+        }
+        public State CurrState { get; set; }*/
+
+
+/*        public static ReadCompressedFileHeadersThread[] workers;
+        private static Queue< ReadCompressedFileHeadersThread > workersQueue = new Queue< ReadCompressedFileHeadersThread >();*/
 
 
 
@@ -89,13 +105,26 @@ namespace VeeamTest
             this.threadIndex = threadIndex;
             this.threadsCount = threadsCount;
 
+
+            //self register
+/*            if( workers == null )
+            {
+                workers=new ReadCompressedFileHeadersThread[threadsCount+1];
+            }
+            workers[ threadIndex ] = this;
+            workersQueue.Enqueue( this );*/
+
+
             thread = new Thread( DoWork );
+            thread.IsBackground = true;
             thread.Start();
         }
 
 
         void DoWork()
         {
+            //CurrState = State.working;
+
             using ( FileStream originalFileStream = new FileStream( fileToDecompress.FullName, 
                 FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
@@ -103,8 +132,8 @@ namespace VeeamTest
                 long iteartionCount = 0;
                 int totalBlocksFound = 0;
 
-                long blockSize = originalFileStream.Length / threadsCount;
-                long initialPos = blockSize * threadIndex;
+                long blockSize = originalFileStream.Length / ( /*Program.maxUsedMemory /*/ threadsCount );//Program.maxUsedMemory / threadsCount;// originalFileStream.Length / threadsCount;
+                long initialPos = blockSize/*(originalFileStream.Length/threadsCount) */* threadIndex;
 
                 byte[] bufferGZipHeader = new byte[4];
                 byte[] bufferCompressedFilePart = new byte[blockSize];
@@ -120,6 +149,12 @@ namespace VeeamTest
 
                 for ( long i = 0; i < blockSize; i ++ )
                 {
+/*                    while( QueueManager.queueMemoryUsed >= (ulong)Program.maxUsedMemory )
+                    {
+                        //wait
+                    }*/
+
+
                     iTemp = i;
                     iteartionCount++;
 
@@ -143,7 +178,6 @@ namespace VeeamTest
                          && bufferGZipHeader [ 2 ] == 0x08
                          && bufferGZipHeader [ 3 ] == 0x00 )
                     {
-                        DataBlock newDataBlock = new DataBlock();
 
                         originalFileStream.Position = i + initialPos;
 
@@ -162,14 +196,21 @@ namespace VeeamTest
                                 gZipStream.Close();
                                 //i += ( bytesRead - 1 );
                             }
-                            newDataBlock.byteData = mStream.ToArray();
+                            //newDataBlock.byteData = mStream.ToArray();
+                            queueManager.Enqueue( 
+                                new DataBlock()
+                                {
+                                    byteData = mStream.ToArray()
+                                }
+                                );
+
                             mStream.Close();
                         }
 
                         #endregion
 
-                        //compresedBlocksQueue.Enqueue( i+ initialPos );
-                        dataBlocksQueue.Enqueue( newDataBlock);
+                        //queueManager.EnqueueForWriting( newDataBlock );
+                        //dataBlocksQueue.Enqueue( newDataBlock);
                         totalBlocksFound++;
 
                         Console.WriteLine( " Thread " + threadIndex +"   "  + iTemp + " R " + totalBlocksFound );
@@ -177,10 +218,96 @@ namespace VeeamTest
                 }
                 Console.WriteLine(" Thread "+threadIndex + " Finished at " + iTemp + " BLOCKS Found = "+ totalBlocksFound );
                 Finished = true;
-
+                //CurrState = State.finished;
             }
 
+/*            while( dataBlocksQueue.Count>0 )
+            {
+            }
+            thread.Abort();*/
 
+        }
+    }
+
+
+
+
+    public class QueueManager
+    {
+        private object locker = new object();
+        Queue<DataBlock> queue = new Queue<DataBlock>();
+        public static ulong queueMemoryUsed = 0;
+        bool isDead = false;
+        private int blockId = 0;
+
+        public void Enqueue ( DataBlock _block )
+        {
+            /*            int id = _block.id;
+                        lock ( locker )
+                        {
+                            if ( isDead )
+                                throw new InvalidOperationException( "Queue already stopped" );
+
+                            while ( id != blockId )
+                            {
+                                Monitor.Wait( locker );
+                            }
+
+                            queue.Enqueue( _block );
+                            blockId++;
+                            Monitor.PulseAll( locker );
+                        }*/
+            queueMemoryUsed += (ulong)_block.byteData.Length;
+            queue.Enqueue( _block );
+
+        }
+
+        /*        public void EnqueueForCompressing ( byte [] buffer )
+                {
+                    lock ( locker )
+                    {
+                        if ( isDead )
+                            throw new InvalidOperationException( "Queue already stopped" );
+
+                        DataBlock _block = new DataBlock(blockId, buffer);
+                        queue.Enqueue( _block );
+                        blockId++;
+                        Monitor.PulseAll( locker );
+                    }
+                }*/
+
+
+        public DataBlock Dequeue ()
+        {
+/*            lock ( locker )
+            {
+                while ( queue.Count == 0 && !isDead )
+                    Monitor.Wait( locker );
+
+                if ( queue.Count == 0 )
+                    return null;
+
+                return queue.Dequeue();
+            }*/
+            DataBlock obj = queue.Dequeue();
+            queueMemoryUsed -= ( ulong )obj.byteData.Length;
+            return obj;
+        }
+
+
+        public int GetQueueCount()
+        {
+            return queue.Count;
+        }
+
+
+        public void Stop ()
+        {
+            lock ( locker )
+            {
+                isDead = true;
+                Monitor.PulseAll( locker );
+            }
         }
     }
 
