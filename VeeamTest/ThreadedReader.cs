@@ -54,13 +54,14 @@ namespace VeeamTest
 
                     while( Program.dataBlocksBufferedMemoryAmount>= Program.maxMemoryForDataBlocksBuffer )
                     {
+                        if(Program.lastWritedDataBlockIndex+1 == i ) break; //if writer need this block then dont sleep
                         Thread.Sleep( 1 ); 
                     }
 
                     #endregion
 
                     
-                    lock ( threadLock )
+                    //lock ( threadLock )
                     {
                         if( funcWork != null ) funcWork.Invoke( readFileStream, i );
                         //Console.Write( " -R " + i );
@@ -74,7 +75,7 @@ namespace VeeamTest
         
 
 
-        #region Read bytes block
+        #region Block work
 
         public static int ReadBytesBlockForDecompression( FileStream readFileStream, ulong index )
         {
@@ -135,6 +136,73 @@ namespace VeeamTest
 
             return 0;
         }
+
+
+        public static int ReadHeaders( FileStream readFileStream, ulong index )
+        {
+            var buffer = new byte[Program.BufferSize + 4 ];
+            byte[] bufferGZipHeader = new byte[4];
+            //long currPos = 0;
+            long diff = 0;
+
+            ulong startReadPosition = index * ( ulong )buffer.Length;
+            if( startReadPosition > 4 ) startReadPosition -= 4;
+
+            readFileStream.Position = ( long )startReadPosition;
+            readFileStream.Read( buffer, 0, buffer.Length );
+
+
+
+            //Read headers
+            for ( ulong i = 0; i < (ulong)buffer.Length; i++ )
+            {
+                
+                #region Read Header
+
+                for ( ulong j = 0; j < (ulong)bufferGZipHeader.Length; j++ )
+                {
+                    if ( (ulong)buffer.Length > i + j ) //check for i+j < bufferAllFile.Lenght
+                    {
+                        bufferGZipHeader [ j ] = buffer [ i + j ];
+                    }
+                }
+
+                #endregion
+
+
+                //Check header and if true => decompress block
+                if ( bufferGZipHeader [ 0 ] == 0x1F
+                     && bufferGZipHeader [ 1 ] == 0x8B
+                     && bufferGZipHeader [ 2 ] == 0x08
+                     && bufferGZipHeader [ 3 ] == 0x00
+                )
+                {
+                    var newHeader = startReadPosition + i;
+
+                    #region Checking
+
+/*                    if ( Program.headersFound.Count > 0 )
+                    {
+                        diff = (long)newHeader - Program.headersFound [ Program.headersFound.Count - 1 ];
+                    }
+                    if ( diff < 0 || (long)newHeader >= readFileStream.Length )
+                    {
+                        //Console.Write( "\n\n NEGATIVE \n\n" );
+                        //headersFound.Add( newHeader );
+                        break;
+                    }*/
+                    if ( Program.headersFound.Contains( (long)newHeader ) ) continue;
+
+                    #endregion
+
+                    Program.headersFound.Add( (long)newHeader );
+                    //Console.Write( " H "+ Program.headersFound.Count  );
+                }
+            }
+
+            return 0;
+        }
+
 
         #endregion
 
