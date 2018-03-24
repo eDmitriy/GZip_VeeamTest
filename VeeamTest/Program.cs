@@ -13,14 +13,15 @@ namespace VeeamTest
     {
         #region Vars
 
-        public static int threadCount = Environment.ProcessorCount*5; //magic number 5 !!! because 20 threads work faster than 4
-        public static long maxUsedMemory = 1024 * 1024 * 20;
+        public static int threadCount = Environment.ProcessorCount*1; //magic number 5 !!! because 20 threads work faster than 4
         public static long BufferSize = 1024*1024;
 
-        public static DataBlock[] dataBlocks = new DataBlock[0];
 
-        static ReadCompressedFileHeadersThread[] readCompressed = new ReadCompressedFileHeadersThread[0];
-        public static int headersFound = 0;
+        public static DataBlock[] dataBlocks = new DataBlock[0];
+        public static ulong dataBlocksBufferedMemoryAmount = 0;
+        public static ulong maxMemoryForDataBlocksBuffer = 1024 * 1024 * 500; //500 mb
+
+
 
         static DateTime startTime;
 
@@ -32,7 +33,7 @@ namespace VeeamTest
         static void Main ( string [] args )
         {
             int nBufferWidth = Console.BufferWidth;
-            int nBufferHeight = 501;
+            int nBufferHeight = 5001;
             Console.SetBufferSize( nBufferWidth, nBufferHeight );
 
 
@@ -63,17 +64,26 @@ namespace VeeamTest
             {
                 //ReadCompressed( args[ 1 ] );
                 string[] strings = args;
-                Thread thread = new Thread(()=> ReadCompressed(strings [ 1 ]));
+                Thread thread = new Thread(()=> ReadCompressedFile(strings [ 1 ]));
                 thread.IsBackground = true;
                 thread.Start( );
 
-                Decompress( args [ 1 ], args [ 2 ] );
+
+                //Decompress( args [ 1 ], args [ 2 ] );
+                Thread thread2 = new Thread( WriteCompressedDataTheaded );
+                thread2.IsBackground = true;
+                string outputFileName = args[ 1 ].Replace( ".gz", "" );
+                if ( args.Length > 2 )
+                {
+                    outputFileName = args [ 2 ];
+                }
+                thread2.Start( outputFileName );
             }
             if ( args [ 0 ].Equals( "compress", StringComparison.InvariantCultureIgnoreCase ) )
             {
                 //Compress( args [ 1 ], args [ 2 ] );
 
-                Thread thread = new Thread( ReadFileThreaded );
+                Thread thread = new Thread( ReadNotCompressedFile );
                 thread.IsBackground = true;
 
                 Thread thread2 = new Thread( WriteCompressedDataTheaded );
@@ -99,7 +109,7 @@ namespace VeeamTest
 
 
 
-        static void ReadFileThreaded( object threadData )
+        static void ReadNotCompressedFile( object threadData )
         {
             string pathToInputFile = ( string ) threadData;
             FileInfo inputFileInfo = new FileInfo( pathToInputFile );
@@ -120,15 +130,16 @@ namespace VeeamTest
 
             #region InitThreads-Read
 
-            List<CompressionThread> gZipThreads = new List< CompressionThread >();
+            List<ThreadedReader> gZipThreads = new List< ThreadedReader >();
 
             for ( int i = 0; i < threadCount; i++ )
             {
-                CompressionThread gZipThread = new CompressionThread(
-                    inputFileInfo, 
-                    //i * (dataChunks.Length/threadCount) 
-                    threadCount, i
+                //CompressionThread gZipThread = new CompressionThread(inputFileInfo, threadCount, i);
+                ThreadedReader gZipThread = new ThreadedReader(
+                    inputFileInfo, threadCount, i, 
+                    ThreadedReader.ReadBytesBlockForCompression
                     );
+
                 gZipThreads.Add( gZipThread );
             }
 
@@ -172,8 +183,10 @@ namespace VeeamTest
                     
                     DataBlock dataChunk = dataBlocks[ index ];
                     outFileStream.Write( dataChunk.byteData, 0, dataChunk.byteData.Length );
-                    
+
+                    dataBlocksBufferedMemoryAmount -= ( ulong ) dataChunk.byteData.Length;
                     dataChunk.byteData=new byte[0];
+
                     Console.Write( " -W " + index );
                 }
             }
@@ -195,44 +208,141 @@ namespace VeeamTest
 
 
 
-        static void ReadCompressed( string fileName )
+        static void ReadCompressedFile( string fileName )
         {
             FileInfo fileToDecompress = new FileInfo( fileName );
             if ( fileToDecompress.Extension != ".gz" ) return;
 
-            long originalFileSize = fileToDecompress.Length;
-            int threadsIndex = 0;
-            maxUsedMemory = Math.Min( maxUsedMemory, originalFileSize );
-            //if( maxUsedMemory <originalFileSize) maxUsedMemory
+            List<long> headersFound = new List< long >();
 
-            //Start threaded headers info reading of compressed blocks in file 
-            long blockCount = (originalFileSize / ( maxUsedMemory / threadCount ));
-            readCompressed = new ReadCompressedFileHeadersThread[blockCount];
-            ReadCompressedFileHeadersThread[] activeReadThreads = new ReadCompressedFileHeadersThread [threadCount];
 
-/*            for ( int i = 0; i < /*threadCount#1#blockCount; i+=threadCount )
+            #region ReadHeders
+
+            using ( FileStream origFileStream = new FileStream( fileToDecompress.FullName, FileMode.Open ) )
             {
+                var buffer = new byte[BufferSize*1/*fileToDecompress.Length*/ ];
+                byte[] bufferGZipHeader = new byte[4];
+                long currPos = 0;
+                long diff = 0;
 
-            }*/
-            while( readCompressed[readCompressed.Length-1]==null )
-            {
-                for ( int j = 0; j < threadCount; j++ )
+
+                while ( true )
                 {
-                    if ( activeReadThreads [ j ] == null 
-                        ||( activeReadThreads [ j ].Finished && activeReadThreads [ j ].queueManager.GetQueueCount()==0 ) )
+                    if( headersFound.Count>0 )
                     {
-                        ReadCompressedFileHeadersThread rWorker =
-                            new ReadCompressedFileHeadersThread(fileToDecompress, /*threadCount*/(int)blockCount, threadsIndex );
-                        if( readCompressed.Length > threadsIndex ) readCompressed [ threadsIndex ] = rWorker;
-                        threadsIndex++;
-                        
-                        activeReadThreads [ j ] = rWorker;
+                        currPos = headersFound[ headersFound.Count - 1 ] + 3;
+                        origFileStream.Position = currPos;
                     }
+
+                    origFileStream.Read( buffer, 0, buffer.Length );
+
+                    //Read headers
+                    for ( long i = 0; i < buffer.Length; i++ )
+                    {
+                        #region Read Header
+
+                        for ( int j = 0; j < bufferGZipHeader.Length; j++ )
+                        {
+                            if ( buffer.Length > i + j ) //check for i+j < bufferAllFile.Lenght
+                            {
+                                bufferGZipHeader [ j ] = buffer [ i + j ];
+                            }
+                        }
+
+                        #endregion
+
+
+                        //Check header and if true => decompress block
+                        if (    bufferGZipHeader [ 0 ] == 0x1F
+                                && bufferGZipHeader [ 1 ] == 0x8B
+                                && bufferGZipHeader [ 2 ] == 0x08
+                                && bufferGZipHeader [ 3 ] == 0x00
+                                )
+                        {
+                            var newHeader = currPos + i;
+
+                            if ( headersFound.Count > 0 )
+                            {
+                                diff = newHeader - headersFound[ headersFound.Count - 1 ] ;
+                            }
+                            if( diff < 0 
+                                || headersFound .Contains( newHeader ) 
+                                || newHeader >= origFileStream.Length )
+                            {
+                                //Console.Write( "\n\n NEGATIVE \n\n" );
+                                //headersFound.Add( newHeader );
+                                break;
+                            }
+                            headersFound.Add( newHeader );
+                            //Console.Write( " H "+ headersFound.Count + " va = " + diff + "  " );
+                        }
+                    }
+
+                    if ( origFileStream.Position >= origFileStream.Length )break;
                 }
             }
+
+            Console.WriteLine("\nHeaders found " + headersFound.Count);
+            Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) );
+            //Console.ReadKey();
+
+
+
+            #endregion
+
+
+            #region DivideToDataBlocks
+
+            dataBlocks = new DataBlock [ headersFound.Count];
+            for ( int i = 0; i < dataBlocks.Length; i++ )
+            {
+                long startIndex, endIndex = 0;
+                startIndex = headersFound[ i ];
+                endIndex = i+1 < headersFound.Count ? headersFound [ i + 1 ] : fileToDecompress.Length+1;
+                //endIndex = headersFound [ i + 1 ];
+
+                dataBlocks [ i ] = new DataBlock()
+                {
+                    startIndex = startIndex,
+                    endIndex = endIndex
+                };
+            }
+
+            #endregion
+
+
+            #region Init Threaded Reading & Compression
+            
+            List<ThreadedReader> gZipThreads = new List< ThreadedReader >();
+
+            for ( int i = 0; i < threadCount; i++ )
+            {
+                ThreadedReader gZipThread = new ThreadedReader(
+                    fileToDecompress, threadCount, i, 
+                    ThreadedReader.ReadBytesBlockForDecompression
+                    );
+                gZipThreads.Add( gZipThread );
+            }
+
+            #endregion
+
+
+
+            while ( gZipThreads.Any( v => !v.Finished ) )
+            {
+                //wait for threads
+            }
+            gZipThreads.Clear();
+            GC.Collect();
+
+
+
+            Console.WriteLine( "" );
+            Console.WriteLine( " Read END" );
         }
 
 
+/*
         static void Decompress ( string fileName, string newFileName )
         {
             FileInfo fileToDecompress = new FileInfo( fileName );
@@ -241,7 +351,7 @@ namespace VeeamTest
             //long originalFileSize = fileToDecompress.Length;
             while( readCompressed == null || readCompressed.Length == 0 )
             {
-                //Console.WriteLine("Wait for read threads starts");
+                //Console.WriteLine("Wait for read threadWorkers starts");
             }
 
             using ( FileStream decompressedFileStream = File.Create( newFileName ) )
@@ -255,25 +365,25 @@ namespace VeeamTest
 
                 while ( readCompressed [ length ] == null 
                     || !readCompressed [ length ].Finished 
-                    || readCompressed [ length ].queueManager.GetQueueCount() > 0 
-                    /*readCompressed.Any(v=>v==null || ( v.Finished==false || v.dataBlocksQueue.Count>0)) */)
+                    || readCompressed [ length ].dataBlocksQueue.Count > 0 
+                    /*readCompressed.Any(v=>v==null || ( v.Finished==false || v.dataBlocksQueue.Count>0)) #1#)
                 {
                     //long newPos = 0;
                     var thread = readCompressed[ threadsIndex ];
                     if(thread==null) continue;
-                    if( thread.Finished && thread.queueManager.GetQueueCount() == 0)
+                    if( thread.Finished && thread.dataBlocksQueue.Count == 0)
                     {
                         threadsIndex++;
                         continue;
                     }
-                    if( thread.queueManager.GetQueueCount() == 0) continue;
+                    if( thread.dataBlocksQueue.Count == 0) continue;
 
 
-                    var newDataBlock = thread.queueManager.Dequeue();
+                    var newDataBlock = thread.dataBlocksQueue.Dequeue();
                     decompressedFileStream.Write( newDataBlock.byteData, 0, newDataBlock.byteData.Length );
 
                     Console.WriteLine( /*"decStr pos = " + originalFileStream.Position
-                                        + */" counter = " + writeCounter++ );
+                                        + #1#" counter = " + writeCounter++ );
                 }
             }
             Console.WriteLine( "Decompressed: {0}", fileToDecompress.Name );
@@ -281,12 +391,16 @@ namespace VeeamTest
 
         }
 
+*/
 
     }
 }
 
 
-public class DataBlock 
+public class DataBlock
 {
+    public long startIndex;
+    public long endIndex;
+
     public byte[] byteData;
 }
