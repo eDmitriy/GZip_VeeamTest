@@ -15,6 +15,7 @@ namespace VeeamTest
         private FileInfo inputFileInfo;
         private int threadsCount;
         private int threadIndex;
+        private bool useLocker = false;
         private Func< FileStream, ulong, int > funcWork;
 
         public bool Finished { get; set; }
@@ -27,12 +28,13 @@ namespace VeeamTest
         #region Constructors
 
         public ThreadedReader ( FileInfo inputFileInfo, int threadsCount,
-            int threadIndex, Func<FileStream, ulong, int> funcWork )
+            int threadIndex, Func<FileStream, ulong, int> funcWork, bool useLocker=false )
         {
             this.inputFileInfo = inputFileInfo;
             this.threadsCount = threadsCount;
             this.threadIndex = threadIndex;
             this.funcWork = funcWork;
+            this.useLocker = useLocker;
 
             thread = new Thread( DoWork );
             thread.IsBackground = true;
@@ -60,12 +62,19 @@ namespace VeeamTest
 
                     #endregion
 
-                    
-                    //lock ( threadLock )
+
+                    if( useLocker )
                     {
-                        if( funcWork != null ) funcWork.Invoke( readFileStream, i );
-                        //Console.Write( " -R " + i );
+                        lock ( threadLock )
+                        {
+                            if ( funcWork != null ) funcWork.Invoke( readFileStream, i );
+                        }
                     }
+                    else
+                    {
+                        if ( funcWork != null ) funcWork.Invoke( readFileStream, i );
+                    }
+                    //Console.Write( " -R " + i );
                 }
 
                 Finished = true;
@@ -140,10 +149,11 @@ namespace VeeamTest
 
         public static int ReadHeaders( FileStream readFileStream, ulong index )
         {
-            var buffer = new byte[Program.BufferSize + 4 ];
+            var buffer = new byte[Program.BufferSize + 8 ]; // read offset for byte mask size for start/end.  4b+data+4b
             byte[] bufferGZipHeader = new byte[4];
             //long currPos = 0;
             long diff = 0;
+            List<long> headers = new List< long >();
 
             ulong startReadPosition = index * ( ulong )buffer.Length;
             if( startReadPosition > 4 ) startReadPosition -= 4;
@@ -181,25 +191,22 @@ namespace VeeamTest
 
                     #region Checking
 
-/*                    if ( Program.headersFound.Count > 0 )
-                    {
-                        diff = (long)newHeader - Program.headersFound [ Program.headersFound.Count - 1 ];
-                    }
-                    if ( diff < 0 || (long)newHeader >= readFileStream.Length )
-                    {
-                        //Console.Write( "\n\n NEGATIVE \n\n" );
-                        //headersFound.Add( newHeader );
-                        break;
-                    }*/
-                    if ( Program.headersFound.Contains( (long)newHeader ) ) continue;
+                    //if ( Program.headersFound.Contains( (long)newHeader ) ) continue;
 
                     #endregion
 
-                    Program.headersFound.Add( (long)newHeader );
+                    headers.Add( (long)newHeader );
+/*                    lock ( threadLock )
+                    {
+                        Program.headersFound.Add( ( long ) newHeader );
+                    }*/
                     //Console.Write( " H "+ Program.headersFound.Count  );
                 }
             }
-
+            lock ( threadLock )
+            {
+                Program.headersFound.AddRange( headers );
+            }
             return 0;
         }
 

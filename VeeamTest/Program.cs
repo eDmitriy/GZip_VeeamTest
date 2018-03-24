@@ -37,37 +37,41 @@ namespace VeeamTest
 /*            int nBufferWidth = Console.BufferWidth;
             int nBufferHeight = 5001;
             Console.SetBufferSize( nBufferWidth, nBufferHeight );*/
-
-
             startTime = DateTime.Now;
+            
+            Console.CancelKeyPress += new ConsoleCancelEventHandler( CancelKeyPress );
+            ShowInfo();
 
-
-            if( ChooseAction( ref args ) == 0 )
+            try
             {
-                Console.ReadKey();
+                Validation.StringReadValidation( args );
+                ChooseAction(  args );
             }
 
+            catch ( Exception ex )
+            {
+                Console.WriteLine( "Error is occured!\n Method: {0}\n Error description {1}", ex.TargetSite, ex.Message );
+                //return 1;
+            }
+            Console.WriteLine("press any key to exit!" );
+            Console.ReadKey();
         }
 
         
 
 
-        static int ChooseAction( ref string[] args )
+        static int ChooseAction( string[] args )
         {
-            if( args.Length < 2 )
-            {
-                Console.WriteLine("Wrong parameters, see help/?");
-                Console.ReadKey();
-                return 1;
-            }
+            Thread thread_Read = null;
+            Thread thread_Write = null;
 
             if ( args [ 0 ].Equals( "decompress", StringComparison.InvariantCultureIgnoreCase ) )
             {
                 //ReadCompressed( args[ 1 ] );
                 string[] strings = args;
-                Thread thread = new Thread(()=> ReadCompressedFile(strings [ 1 ]));
-                thread.IsBackground = true;
-                thread.Start( );
+                thread_Read = new Thread(()=> ReadCompressedFile(strings [ 1 ]));
+                thread_Read.IsBackground = true;
+                thread_Read.Start( );
 
 
                 //Decompress( args [ 1 ], args [ 2 ] );
@@ -77,18 +81,18 @@ namespace VeeamTest
                 {
                     outputFileName = args [ 2 ];
                 }
-                Thread thread2 = new Thread( ()=> WriteDataBlocksToOutputFile(outputFileName, strings[1]) );
-                thread2.IsBackground = true;
-                thread2.Start( );
+                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(outputFileName, strings[1]) );
+                thread_Write.IsBackground = true;
+                thread_Write.Start( );
             }
             if ( args [ 0 ].Equals( "compress", StringComparison.InvariantCultureIgnoreCase ) )
             {
                 //Compress( args [ 1 ], args [ 2 ] );
                 string[] strings = args;
 
-                Thread thread = new Thread( ()=>ReadNotCompressedFile(strings[1]) );
-                thread.IsBackground = true;
-                thread.Start();
+                thread_Read = new Thread( ()=>ReadNotCompressedFile(strings[1]) );
+                thread_Read.IsBackground = true;
+                thread_Read.Start();
 
 
                 string outputFileName = args[ 1 ]+".gz";
@@ -96,14 +100,22 @@ namespace VeeamTest
                 {
                     outputFileName = args [ 2 ];
                 }
-                Thread thread2 = new Thread( ()=> WriteDataBlocksToOutputFile(outputFileName, strings[1]) );
-                thread2.IsBackground = true;
-                thread2.Start( );
+                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(outputFileName, strings[1]) );
+                thread_Write.IsBackground = true;
+                thread_Write.Start( );
 
 
                 //WriteCompressedDataTheaded( args [ 2 ] );
             }
 
+
+            if( thread_Read != null && thread_Write !=null)
+            {
+                while( thread_Read.IsAlive || thread_Write.IsAlive )
+                {
+                    Thread.Sleep( 10 );
+                }
+            }
             return 0;
         }
 
@@ -171,41 +183,38 @@ namespace VeeamTest
             FileInfo fileToDecompress = new FileInfo( fileName );
             if ( fileToDecompress.Extension != ".gz" ) return;
 
-            //List<long> headersFound = new List< long >();
-
-
 
             #region Read Headers from compressed input file
 
             List<ThreadedReader> gZipThreads_Headers = new List< ThreadedReader >();
 
 
-            #region Create DataBlocks
-
+            // Create DataBlocks
             dataBlocks = new DataBlock [ fileToDecompress.Length/BufferSize+1 ];
             for ( int i = 0; i < dataBlocks.Length; i++ )
             {
                 dataBlocks [ i ] = new DataBlock();
             }
 
-            #endregion
-
+            //threads read headers
             for ( int i = 0; i < threadCount; i++ )
             {
                 ThreadedReader gZipThread = new ThreadedReader(
                     fileToDecompress, threadCount, i,
                     ThreadedReader.ReadHeaders
+                    //, true
                 );
                 gZipThreads_Headers.Add( gZipThread );
             }
 
+            //wait for threads
             while ( gZipThreads_Headers.Any( v => !v.Finished ) )
             {
                 Thread.Sleep( 100 );
             }
 
             //order headers
-            headersFound = headersFound.OrderBy( v => v ).ToList();
+            headersFound = headersFound.Distinct().OrderBy( v => v ).ToList();
 
 /*            using ( FileStream origFileStream = new FileStream( fileToDecompress.FullName, FileMode.Open ) )
             {
@@ -281,7 +290,6 @@ namespace VeeamTest
             #endregion
 
 
-
             #region Create DataBlocks array from  GZipHeaders. Each DB have indexes(start/end) for reading from input file
 
             dataBlocks = new DataBlock [ headersFound.Count ];
@@ -337,15 +345,17 @@ namespace VeeamTest
 
 
 
-        static void WriteDataBlocksToOutputFile( /*object threadData*/string newFileName, string inputFileName )
+        static void WriteDataBlocksToOutputFile( string newFileName, string inputFileName )
         {
-            //string newFileName = ( string ) threadData;
+            //Console.WriteLine( inputFileName );
+
+
             FileInfo outFileInfo = new FileInfo( newFileName );
             FileInfo inputFileInfo = new FileInfo( inputFileName );
 
+            //wait for dataBlocks creation
             while ( !readyToWrite/*dataBlocks==null || dataBlocks.Length<1*/ )
             {
-                //wait for chunks creation
                 Thread.Sleep( 10 );
             }
 
@@ -361,7 +371,7 @@ namespace VeeamTest
                     DataBlock dataChunk = dataBlocks[ i ];
 
                     /* wait for chunkData */
-                    while ( dataChunk.byteData == null )
+            while ( dataChunk.byteData == null )
                     {
                         Thread.Sleep( 10 );
                     }
@@ -374,9 +384,17 @@ namespace VeeamTest
                     dataChunk.byteData=new byte[0];
                     lastWritedDataBlockIndex = i;
 
-                    Console.Write( " -W " + i );
+                    //Console.Write( " -W " + i );
+                    //Console.Clear();
+/*                  Console.WriteLine( inputFileName );
+                    Console.WriteLine( "GZip Headers found = " + headersFound.Count );*/
+                    Console.SetCursorPosition( 0, Console.CursorTop - 1 );
+                    ClearCurrentConsoleLine();
+                    Console.WriteLine( (int)( (i/( float )dataBlocks.Length)*100 )+ " %. " + " -Write_index " + i );
                 }
             }
+            Console.WriteLine(  "100 %. " );
+
             GC.Collect();
 
 
@@ -387,11 +405,44 @@ namespace VeeamTest
             Console.WriteLine( " Write END" );
 
             Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) );
-            Console.ReadKey();
+            //Console.ReadKey();
 
         }
-        
-        
+
+
+
+
+        #region Utils
+
+        static void ShowInfo ()
+        {
+            Console.WriteLine( "To zip or unzip files please proceed with the following pattern to type in:\n" +
+                               "Zipping: GZipTest.exe compress [Source file path] [Destination file path]\n" +
+                               "Unzipping: GZipTest.exe decompress [Compressed file path] [Destination file path]\n" +
+                               "To complete the program correct please use the combination CTRL + C" );
+        }
+
+
+        static void CancelKeyPress ( object sender, ConsoleCancelEventArgs _args )
+        {
+            if ( _args.SpecialKey == ConsoleSpecialKey.ControlC )
+            {
+                Console.WriteLine( "\nCancelling..." );
+                _args.Cancel = true;
+                Environment.Exit( 1 );
+            }
+        }
+
+
+        public static void ClearCurrentConsoleLine ()
+        {
+            int currentLineCursor = Console.CursorTop;
+            Console.SetCursorPosition( 0, Console.CursorTop );
+            Console.Write( new string( ' ', Console.WindowWidth ) );
+            Console.SetCursorPosition( 0, currentLineCursor );
+        }
+        #endregion
+
     }
 }
 
