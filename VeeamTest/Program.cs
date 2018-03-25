@@ -4,7 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading;
-
+using Microsoft.VisualBasic.Devices;
 
 
 namespace VeeamTest
@@ -37,14 +37,24 @@ namespace VeeamTest
 /*            int nBufferWidth = Console.BufferWidth;
             int nBufferHeight = 5001;
             Console.SetBufferSize( nBufferWidth, nBufferHeight );*/
-            startTime = DateTime.Now;
             
             Console.CancelKeyPress += new ConsoleCancelEventHandler( CancelKeyPress );
             ShowInfo();
 
             try
             {
+                #region Validation
+
+                //memory check
+                if( new ComputerInfo().AvailableVirtualMemory / ( 1024 * 1024 ) < 500 )
+                {
+                    throw new Exception( "This program requires at least 500 mb of free RAM" );
+                }
                 Validation.StringReadValidation( args );
+
+                #endregion
+
+                startTime = DateTime.Now;
                 ChooseAction(  args );
             }
 
@@ -72,13 +82,13 @@ namespace VeeamTest
                 thread_Read.Start( );
                 
                 thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(
-                    args [ 1 ].Replace( ".gz", "" ),
+                    args [ 2 ]/*.Replace( ".gz", "" )*/,
                     args [ 1 ]) 
                     );
                 thread_Write.IsBackground = true;
                 thread_Write.Start( );
 
-                Console.WriteLine( "Decompressing of " + args [ 1 ] + " Started..." );
+                Console.WriteLine( "\n\nDecompressing of " + args [ 1 ] + " started..." );
             }
             if ( args [ 0 ].Equals( "compress", StringComparison.InvariantCultureIgnoreCase ) )
             {
@@ -90,7 +100,7 @@ namespace VeeamTest
                 thread_Write.IsBackground = true;
                 thread_Write.Start( );
                 
-                Console.WriteLine( "Compression of " + args [ 1 ] + " Started..." );
+                Console.WriteLine( "\n\nCompression of " + args [ 1 ] + " started..." );
             }
 
 
@@ -159,128 +169,138 @@ namespace VeeamTest
             GC.Collect();
 
 
-            Console.WriteLine( "" );
-            Console.WriteLine( " Read END" );
+/*            Console.WriteLine( "" );
+            Console.WriteLine( " Read END" );*/
         }
 
         static void ReadCompressedFile ( string fileName )
         {
-            FileInfo fileToDecompress = new FileInfo( fileName );
-            if ( fileToDecompress.Extension != ".gz" ) return;
-
-
-            #region Read Headers from compressed input file
-
-            Console.WriteLine( "Reading GZip Headers, this can take a few minutes for a large file" );
-
-            List<ThreadedReader> gZipThreads_Headers = new List< ThreadedReader >();
-
-
-            // Create DataBlocks
-            dataBlocks = new DataBlock [ fileToDecompress.Length/BufferSize+1 ];
-            for ( int i = 0; i < dataBlocks.Length; i++ )
+            try
             {
-                dataBlocks [ i ] = new DataBlock();
-            }
+                FileInfo fileToDecompress = new FileInfo( fileName );
+                if ( fileToDecompress.Extension != ".gz" ) return;
 
-            //threads read headers
-            for ( int i = 0; i < threadCount; i++ )
-            {
-                ThreadedReader gZipThread = new ThreadedReader(
+
+                #region Read Headers from compressed input file
+
+                Console.WriteLine( "Reading GZip Headers, this can take a few minutes for a large file" );
+
+                List<ThreadedReader> gZipThreads_Headers = new List< ThreadedReader >();
+
+
+                // Create DataBlocks
+                dataBlocks = new DataBlock [ fileToDecompress.Length / BufferSize + 1 ];
+                for ( int i = 0; i < dataBlocks.Length; i++ )
+                {
+                    dataBlocks [ i ] = new DataBlock();
+                }
+
+                //threads read headers
+                for ( int i = 0; i < threadCount; i++ )
+                {
+                    ThreadedReader gZipThread = new ThreadedReader(
                     fileToDecompress, threadCount, i,
                     ThreadedReader.ReadHeaders
                     //, true
                 );
-                gZipThreads_Headers.Add( gZipThread );
-            }
+                    gZipThreads_Headers.Add( gZipThread );
+                }
 
-            //wait for threads
-            while ( gZipThreads_Headers.Any( v => !v.Finished ) )
-            {
-                Thread.Sleep( 100 );
-            }
-
-            //order headers
-            headersFound = headersFound.Distinct().OrderBy( v => v ).ToList();
-
-
-            Console.WriteLine( "\nHeaders found " + headersFound.Count );
-            Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) +"\n\n" );
-            
-
-            #endregion
-
-
-            #region Create DataBlocks array from  GZipHeaders. Each DB have indexes(start/end) for reading from input file
-
-            dataBlocks = new DataBlock [ headersFound.Count ];
-            for ( int i = 0; i < dataBlocks.Length; i++ )
-            {
-                long startIndex, endIndex = 0;
-                startIndex = headersFound [ i ];
-                endIndex = i + 1 < headersFound.Count ? headersFound [ i + 1 ] : fileToDecompress.Length + 1;
-                //endIndex = headersFound [ i + 1 ];
-
-                dataBlocks [ i ] = new DataBlock()
+                //wait for threads
+                while ( gZipThreads_Headers.Any( v => !v.Finished ) )
                 {
-                    startIndex = startIndex,
-                    endIndex = endIndex
-                };
-            }
-
-            #endregion
+                    Thread.Sleep( 100 );
+                }
 
 
-            readyToWrite = true;
+                //check for broken gzip
+                if ( headersFound.Count == 0 )
+                {
+                    throw new Exception( "Source file doesn't contains any compressed data" );
+                }
 
 
-            #region Read compressed input file by DataBlocks indexes
+                //order headers
+                headersFound = headersFound.Distinct().OrderBy( v => v ).ToList();
 
-            List<ThreadedReader> gZipThreads = new List< ThreadedReader >();
 
-            for ( int i = 0; i < threadCount; i++ )
-            {
-                ThreadedReader gZipThread = new ThreadedReader(
+                Console.WriteLine( "\nHeaders found " + headersFound.Count );
+                Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) + "\n\n" );
+
+
+                #endregion
+
+
+                #region Create DataBlocks array from  GZipHeaders. Each DB have indexes(start/end) for reading from input file
+
+                dataBlocks = new DataBlock [ headersFound.Count ];
+                for ( int i = 0; i < dataBlocks.Length; i++ )
+                {
+                    long startIndex, endIndex = 0;
+                    startIndex = headersFound [ i ];
+                    endIndex = i + 1 < headersFound.Count ? headersFound [ i + 1 ] : fileToDecompress.Length + 1;
+                    //endIndex = headersFound [ i + 1 ];
+
+                    dataBlocks [ i ] = new DataBlock()
+                    {
+                        startIndex = startIndex,
+                        endIndex = endIndex
+                    };
+                }
+
+                #endregion
+
+
+                readyToWrite = true;
+
+
+                #region Read compressed input file by DataBlocks indexes
+
+                List<ThreadedReader> gZipThreads = new List< ThreadedReader >();
+
+                for ( int i = 0; i < threadCount; i++ )
+                {
+                    ThreadedReader gZipThread = new ThreadedReader(
                     fileToDecompress, threadCount, i,
                     ThreadedReader.ReadBytesBlockForDecompression
                     );
-                gZipThreads.Add( gZipThread );
+                    gZipThreads.Add( gZipThread );
+                }
+
+
+                //wait for threads
+                while ( gZipThreads.Any( v => !v.Finished ) )
+                {
+                    Thread.Sleep( 100 );
+                }
+
+                gZipThreads.Clear();
+                GC.Collect();
+
+                #endregion
+
             }
 
-            #endregion
-
-
-            //wait for threads
-            while ( gZipThreads.Any( v => !v.Finished ) )
+            catch ( Exception ex )
             {
-                Thread.Sleep( 100 );
+                Console.WriteLine( "Error is occured!\n Method: {0}\n Error description {1}", ex.TargetSite, ex.Message );
             }
-
-            gZipThreads.Clear();
-            GC.Collect();
-            
-
-            Console.WriteLine( "" );
-            Console.WriteLine( " Read END" );
         }
 
 
 
         static void WriteDataBlocksToOutputFile( string newFileName, string inputFileName )
         {
-            //Console.WriteLine( inputFileName );
-
-
             FileInfo outFileInfo = new FileInfo( newFileName );
             FileInfo inputFileInfo = new FileInfo( inputFileName );
 
             //wait for dataBlocks creation
-            while ( !readyToWrite/*dataBlocks==null || dataBlocks.Length<1*/ )
+            while ( !readyToWrite )
             {
                 Thread.Sleep( 10 );
             }
 
-
+            //write every dataBlock continuously or wait for dataBlock become ready
             using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
             {
                 outFileStream.Lock( 0, dataBlocks.Length*BufferSize );
@@ -289,35 +309,39 @@ namespace VeeamTest
                 //for every block do write
                 for ( ulong i = 0; i < (ulong)dataBlocks.Length; i++ )
                 {
-                    DataBlock dataChunk = dataBlocks[ i ];
+                    DataBlock dataBlock = dataBlocks[ i ];
 
-                    /* wait for chunkData */
-            while ( dataChunk.byteData == null )
+                    /* wait for dataBlock bytes ready */
+                    while ( dataBlock.byteData == null )
                     {
                         Thread.Sleep( 10 );
                     }
-
                     
 
-                    outFileStream.Write( dataChunk.byteData, 0, dataChunk.byteData.Length );
+                    outFileStream.Write( dataBlock.byteData, 0, dataBlock.byteData.Length );
 
-                    dataBlocksBufferedMemoryAmount -= ( ulong ) dataChunk.byteData.Length;
-                    dataChunk.byteData=new byte[0];
+                    dataBlocksBufferedMemoryAmount -= ( ulong )dataBlock.byteData.Length;
+                    dataBlock.byteData = new byte[0];
                     lastWritedDataBlockIndex = i;
 
+
+                    #region Console info
+
                     //Console.Write( " -W " + i );
-                    //Console.Clear();
-/*                  Console.WriteLine( inputFileName );
-                    Console.WriteLine( "GZip Headers found = " + headersFound.Count );*/
                     Console.SetCursorPosition( 0, Console.CursorTop - 1 );
                     ClearCurrentConsoleLine();
                     Console.WriteLine( (int)( (i/( float )dataBlocks.Length)*100 )+ " %. " + " -Write_index " + i );
+
+                    #endregion
                 }
             }
-            Console.WriteLine(  "100 %. " );
 
+            //finished
+            Console.WriteLine(  "100 %. " );
             GC.Collect();
 
+
+            #region Write to console final results
 
             Console.WriteLine( "\nCompressed {0} from {1} to {2} bytes. \nComprRate = {3} X",
                 inputFileInfo.Name, inputFileInfo.Length.ToString(), outFileInfo.Length.ToString()
@@ -326,8 +350,9 @@ namespace VeeamTest
             Console.WriteLine( " Write END" );
 
             Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) );
-            //Console.ReadKey();
+            Console.WriteLine( outFileInfo.FullName  );
 
+            #endregion
         }
 
        

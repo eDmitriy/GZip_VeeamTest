@@ -39,18 +39,22 @@ namespace VeeamTest
 
             thread = new Thread( DoWork );
             thread.IsBackground = true;
-            thread.Name = "DeCompressionThread " + threadIndex;
+            thread.Name = "ThreadedReader " + threadIndex;
             thread.Start();
         }
 
         #endregion
-        
 
+
+        /// <summary>
+        /// This method will loop dataBlocks array and send them for a further processing
+        /// </summary>
         void DoWork ()
         {
             using ( var readFileStream = new FileStream( inputFileInfo.FullName, 
                 FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
+
                 for ( ulong i = ( ulong )threadIndex; i < ( ulong )Program.dataBlocks.Length; i += ( ulong )threadsCount )
                 {
                     #region MemoryLimit
@@ -95,22 +99,6 @@ namespace VeeamTest
             readFileStream.Position = newDataChunk.startIndex;
             int bytesRead = readFileStream.Read( buffer, 0, buffer.Length );
 
-            //check for wrong header
-/*            if ( buffer [ 0 ] != ( 0x1F ) )
-            {
-                Console.WriteLine( "\n\n Wrong stream. " + " ThreadIndex " + threadIndex
-                                   + " loop index " + index + " \n\n" );
-
-                readFileStream.Position = newDataChunk.startIndex - 100;
-                buffer = new byte [ 200 ];
-                readFileStream.Read( buffer, 0, buffer.Length );
-                readFileStream.Flush();
-
-                newDataChunk.byteData = new byte [ 1 ];
-                return 1;
-            }*/
-
-
             //if reach end file and buffer filled with nulls
             if ( bytesRead < buffer.Length )
             {
@@ -125,6 +113,7 @@ namespace VeeamTest
 
         public static int ReadBytesBlockForCompression( FileStream readFileStream, ulong index )
         {
+            var newDataChunk = Program.dataBlocks[ index ];
             byte[] buffer = new byte [ Program.BufferSize ]; 
 
 
@@ -139,7 +128,6 @@ namespace VeeamTest
                 buffer = buffer.Take( bytesRead ).ToArray();
             }
 
-            var newDataChunk = Program.dataBlocks[ index ];
             newDataChunk.byteData = CompressDataBlock( buffer, CompressionMode.Compress );
             Program.dataBlocksBufferedMemoryAmount += ( ulong )newDataChunk.byteData.Length;
 
@@ -232,7 +220,7 @@ namespace VeeamTest
                 {
                     using ( GZipStream gZipStream = new GZipStream( mStreamOrigFile, CompressionMode.Decompress ) )
                     {
-/*                        while ( ( bytesRead = gZipStream.Read( buffer,
+                        /*while ( ( bytesRead = gZipStream.Read( buffer,
                                     0, buffer.Length ) ) > 0 )
                         {
                             mStream.Write( buffer, 0, bytesRead );

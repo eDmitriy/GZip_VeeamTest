@@ -49,7 +49,22 @@ namespace VeeamTest
 
             if ( _fileOut.Extension == ".gz" && _fileOut.Exists )
             {
-                throw new Exception( "Destination file already exists. Please indiciate the different file name." );
+                Console.WriteLine( "Destination file already exists. Do you want override? Y/N " );
+
+                while ( true)
+                {
+                    if(Console.ReadKey( true ).Key == ConsoleKey.Y  )
+                    {
+                        //Console.WriteLine( "Overriding" );
+                        break;
+                    }
+                    if ( Console.ReadKey( true ).Key == ConsoleKey.N )
+                    {
+                        throw new Exception( "Destination file already exists. Please indiciate the different file name." );
+                        //Environment.Exit( 0 );
+                    }
+                }
+
             }
 
             if ( _fileIn.Extension != ".gz" && args [ 0 ] == "decompress" )
