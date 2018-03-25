@@ -186,6 +186,8 @@ namespace VeeamTest
 
             #region Read Headers from compressed input file
 
+            Console.WriteLine( "Reading GZip Headers, this can take a few minutes for a large file" );
+
             List<ThreadedReader> gZipThreads_Headers = new List< ThreadedReader >();
 
 
@@ -216,76 +218,10 @@ namespace VeeamTest
             //order headers
             headersFound = headersFound.Distinct().OrderBy( v => v ).ToList();
 
-/*            using ( FileStream origFileStream = new FileStream( fileToDecompress.FullName, FileMode.Open ) )
-            {
-                var buffer = new byte[BufferSize*1/*fileToDecompress.Length#1# ];
-                byte[] bufferGZipHeader = new byte[4];
-                long currPos = 0;
-                long diff = 0;
-
-
-                while ( true )
-                {
-                    if ( headersFound.Count > 0 )
-                    {
-                        currPos = headersFound [ headersFound.Count - 1 ] + 3;
-                        origFileStream.Position = currPos;
-                    }
-
-                    origFileStream.Read( buffer, 0, buffer.Length );
-
-                    //Read headers
-                    for ( long i = 0; i < buffer.Length; i++ )
-                    {
-                        #region Read Header
-
-                        for ( int j = 0; j < bufferGZipHeader.Length; j++ )
-                        {
-                            if ( buffer.Length > i + j ) //check for i+j < bufferAllFile.Lenght
-                            {
-                                bufferGZipHeader [ j ] = buffer [ i + j ];
-                            }
-                        }
-
-                        #endregion
-
-
-                        //Check header and if true => decompress block
-                        if ( bufferGZipHeader [ 0 ] == 0x1F
-                                && bufferGZipHeader [ 1 ] == 0x8B
-                                && bufferGZipHeader [ 2 ] == 0x08
-                                && bufferGZipHeader [ 3 ] == 0x00
-                                )
-                        {
-                            var newHeader = currPos + i;
-
-                            #region Checking
-                            
-                            if ( headersFound.Count > 0 )
-                            {
-                                diff = newHeader - headersFound [ headersFound.Count - 1 ];
-                            }
-                            if ( diff < 0 || newHeader >= origFileStream.Length )
-                            {
-                                //Console.Write( "\n\n NEGATIVE \n\n" );
-                                //headersFound.Add( newHeader );
-                                break;
-                            }
-                            if( headersFound.Contains( newHeader ) ) continue;
-
-                            #endregion
-
-                            headersFound.Add( newHeader );
-                            //Console.Write( " H "+ headersFound.Count + " va = " + diff + "  " );
-                        }
-                    }
-
-                    if ( origFileStream.Position >= origFileStream.Length ) break;
-                }
-            }*/
 
             Console.WriteLine( "\nHeaders found " + headersFound.Count );
-            Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) );
+            Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) +"\n\n" );
+            
 
             #endregion
 

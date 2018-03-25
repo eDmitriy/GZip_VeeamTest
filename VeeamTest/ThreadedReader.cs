@@ -21,9 +21,10 @@ namespace VeeamTest
         public bool Finished { get; set; }
 
         static object threadLock = new object();
+        static object threadLock_headersRead = new object();
 
         #endregion
-        
+
 
         #region Constructors
 
@@ -149,15 +150,17 @@ namespace VeeamTest
 
         public static int ReadHeaders( FileStream readFileStream, ulong index )
         {
-            var buffer = new byte[Program.BufferSize + 8 ]; // read offset for byte mask size for start/end.  4b+data+4b
-            byte[] bufferGZipHeader = new byte[4];
+            byte[] bufferGZipHeader = new byte[6];
+            var buffer = new byte[Program.BufferSize + bufferGZipHeader.Length*2 ]; // read offset for byte mask size for start/end.  5b+data+5b
             //long currPos = 0;
-            long diff = 0;
+            //long diff = 0;
             List<long> headers = new List< long >();
 
             ulong startReadPosition = index * ( ulong )buffer.Length;
-            if( startReadPosition > 4 ) startReadPosition -= 4;
+            //if read position not at 0 => offset position
+            if( startReadPosition > ( ulong )bufferGZipHeader.Length ) startReadPosition -= (ulong)bufferGZipHeader.Length;
 
+            //read from file
             readFileStream.Position = ( long )startReadPosition;
             readFileStream.Read( buffer, 0, buffer.Length );
 
@@ -185,6 +188,8 @@ namespace VeeamTest
                      && bufferGZipHeader [ 1 ] == 0x8B
                      && bufferGZipHeader [ 2 ] == 0x08
                      && bufferGZipHeader [ 3 ] == 0x00
+                     && bufferGZipHeader [ 4 ] == 0x00
+                     && bufferGZipHeader [ 5 ] == 0x00
                 )
                 {
                     var newHeader = startReadPosition + i;
@@ -203,7 +208,7 @@ namespace VeeamTest
                     //Console.Write( " H "+ Program.headersFound.Count  );
                 }
             }
-            lock ( threadLock )
+            lock ( threadLock_headersRead )
             {
                 Program.headersFound.AddRange( headers );
             }
