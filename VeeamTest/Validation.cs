@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.VisualBasic.Devices;
 
 namespace VeeamTest
 {
@@ -47,7 +48,7 @@ namespace VeeamTest
                 throw new Exception( "File has already been compressed." );
             }
 
-            if ( _fileOut.Extension == ".gz" && _fileOut.Exists )
+            if ( /*_fileOut.Extension == ".gz" &&*/ _fileOut.Exists )
             {
                 Console.WriteLine( "Destination file already exists. Do you want override? Y/N " );
 
@@ -82,5 +83,15 @@ namespace VeeamTest
             }
         }
 
+
+        public static void HardwareValidation()
+        {
+            ulong minFreeMemory =  (ulong)(Program.threadCount * 125*(1024*1024)) + Program.maxMemoryForDataBlocksBuffer ;
+            //Console.WriteLine( "MinFreeMemory = " + minFreeMemory / ( 1024 * 1024 ) );
+            if ( new ComputerInfo().AvailableVirtualMemory < minFreeMemory )
+            {
+                throw new Exception( "This program requires at least " + ( minFreeMemory / ( 1024 * 1024 ) ) + " mb of free RAM" );
+            }
+        }
     }
 }

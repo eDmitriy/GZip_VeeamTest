@@ -4,7 +4,6 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading;
-using Microsoft.VisualBasic.Devices;
 
 
 namespace VeeamTest
@@ -14,7 +13,7 @@ namespace VeeamTest
         #region Vars
 
         public static int threadCount = Environment.ProcessorCount;
-        public static long BufferSize = 1024*1024*1;
+        public static readonly long BufferSize = 1024*1024;
 
 
         public static DataBlock[] dataBlocks = new DataBlock[0];
@@ -27,6 +26,7 @@ namespace VeeamTest
 
 
         static DateTime startTime;
+        private static string currOperation = "";
 
         #endregion
 
@@ -34,10 +34,6 @@ namespace VeeamTest
 
         static void Main ( string [] args )
         {
-/*            int nBufferWidth = Console.BufferWidth;
-            int nBufferHeight = 5001;
-            Console.SetBufferSize( nBufferWidth, nBufferHeight );*/
-            
             Console.CancelKeyPress += new ConsoleCancelEventHandler( CancelKeyPress );
             ShowInfo();
 
@@ -45,17 +41,13 @@ namespace VeeamTest
             {
                 #region Validation
 
-                //memory check
-                if( new ComputerInfo().AvailableVirtualMemory / ( 1024 * 1024 ) < 500 )
-                {
-                    throw new Exception( "This program requires at least 500 mb of free RAM" );
-                }
+                Validation.HardwareValidation();
                 Validation.StringReadValidation( args );
 
                 #endregion
-
+                
                 startTime = DateTime.Now;
-                ChooseAction(  args );
+                ChooseOperation(  args );
             }
 
             catch ( Exception ex )
@@ -63,17 +55,19 @@ namespace VeeamTest
                 Console.WriteLine( "Error is occured!\n Method: {0}\n Error description {1}", ex.TargetSite, ex.Message );
                 //return 1;
             }
-            Console.WriteLine("press any key to exit!" );
+            Console.WriteLine("\nPress any key to exit!" );
             Console.ReadKey();
         }
 
         
-
-
-        static int ChooseAction( string[] args )
+        static int ChooseOperation( string[] args )
         {
             Thread thread_Read = null;
             Thread thread_Write = null;
+
+            currOperation = args[ 0 ].ToLower();
+            Console.WriteLine( "\n\n"+currOperation + "ion of " + args [ 1 ] + " started..." );
+
 
             if ( args [ 0 ].Equals( "decompress", StringComparison.InvariantCultureIgnoreCase ) )
             {
@@ -87,8 +81,6 @@ namespace VeeamTest
                     );
                 thread_Write.IsBackground = true;
                 thread_Write.Start( );
-
-                Console.WriteLine( "\n\nDecompressing of " + args [ 1 ] + " started..." );
             }
             if ( args [ 0 ].Equals( "compress", StringComparison.InvariantCultureIgnoreCase ) )
             {
@@ -99,8 +91,6 @@ namespace VeeamTest
                 thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile( args [ 2 ], args [ 1 ]) );
                 thread_Write.IsBackground = true;
                 thread_Write.Start( );
-                
-                Console.WriteLine( "\n\nCompression of " + args [ 1 ] + " started..." );
             }
 
 
@@ -225,7 +215,7 @@ namespace VeeamTest
 
 
                 Console.WriteLine( "\nHeaders found " + headersFound.Count );
-                Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) + "\n\n" );
+                Console.WriteLine( string.Format( "Completed in {0} seconds", ( DateTime.Now - startTime ).TotalSeconds ) + "\n\n" );
 
 
                 #endregion
@@ -337,20 +327,35 @@ namespace VeeamTest
             }
 
             //finished
-            Console.WriteLine(  "100 %. " );
             GC.Collect();
 
 
             #region Write to console final results
 
-            Console.WriteLine( "\nCompressed {0} from {1} to {2} bytes. \nComprRate = {3} X",
-                inputFileInfo.Name, inputFileInfo.Length.ToString(), outFileInfo.Length.ToString()
-                , ( ( float )inputFileInfo.Length / ( float )outFileInfo.Length ) );
-            Console.WriteLine( "" );
-            Console.WriteLine( " Write END" );
+            #region ComperssionRate
 
-            Console.WriteLine( string.Format( "Completed in {0}", ( DateTime.Now - startTime ).TotalSeconds ) );
-            Console.WriteLine( outFileInfo.FullName  );
+            float comprRate = 0;
+            switch ( currOperation )
+            {
+                case "compress":
+                    comprRate = ( ( float )inputFileInfo.Length / ( float )outFileInfo.Length );
+                    break;
+                case "decompress":
+                    comprRate =  ( float )outFileInfo.Length / ( float )inputFileInfo.Length;
+                    break;
+                default:
+                    break;
+            }
+
+            #endregion
+
+            Console.WriteLine( "100 %. " );
+
+            Console.WriteLine("\n"+ currOperation+"ion "+ "{0} from {1} to {2} bytes. \nCompression Rate = {3} X",
+                inputFileInfo.Name, inputFileInfo.Length.ToString(), outFileInfo.Length.ToString(), comprRate );
+            //Console.WriteLine( "\n Write END" );
+
+            Console.WriteLine( string.Format( "Completed in {0} seconds", ( DateTime.Now - startTime ).TotalSeconds ) );
 
             #endregion
         }
@@ -378,13 +383,14 @@ namespace VeeamTest
         }
 
 
-        public static void ClearCurrentConsoleLine ()
+        static void ClearCurrentConsoleLine ()
         {
             int currentLineCursor = Console.CursorTop;
             Console.SetCursorPosition( 0, Console.CursorTop );
             Console.Write( new string( ' ', Console.WindowWidth ) );
             Console.SetCursorPosition( 0, currentLineCursor );
         }
+
         #endregion
 
     }

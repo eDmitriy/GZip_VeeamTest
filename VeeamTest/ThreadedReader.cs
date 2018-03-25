@@ -20,7 +20,6 @@ namespace VeeamTest
 
         public bool Finished { get; set; }
 
-        static object threadLock = new object();
         static object threadLock_headersRead = new object();
 
         #endregion
@@ -29,17 +28,16 @@ namespace VeeamTest
         #region Constructors
 
         public ThreadedReader ( FileInfo inputFileInfo, int threadsCount,
-            int threadIndex, Func<FileStream, ulong, int> funcWork, bool useLocker=false )
+            int threadIndex, Func<FileStream, ulong, int> funcWork )
         {
             this.inputFileInfo = inputFileInfo;
             this.threadsCount = threadsCount;
             this.threadIndex = threadIndex;
             this.funcWork = funcWork;
-            this.useLocker = useLocker;
 
             thread = new Thread( DoWork );
             thread.IsBackground = true;
-            thread.Name = "ThreadedReader " + threadIndex;
+            thread.Name = "ThreadedReader_" + threadIndex;
             thread.Start();
         }
 
@@ -68,17 +66,8 @@ namespace VeeamTest
                     #endregion
 
 
-                    if( useLocker )
-                    {
-                        lock ( threadLock )
-                        {
-                            if ( funcWork != null ) funcWork.Invoke( readFileStream, i );
-                        }
-                    }
-                    else
-                    {
-                        if ( funcWork != null ) funcWork.Invoke( readFileStream, i );
-                    }
+                    if ( funcWork != null ) funcWork.Invoke( readFileStream, i );
+
                     //Console.Write( " -R " + i );
                 }
 
