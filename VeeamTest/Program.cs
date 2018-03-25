@@ -13,13 +13,13 @@ namespace VeeamTest
     {
         #region Vars
 
-        public static int threadCount = Environment.ProcessorCount*5; //magic number 5 !!! because 20 threads work faster than 4
+        public static int threadCount = Environment.ProcessorCount;
         public static long BufferSize = 1024*1024*1;
 
 
         public static DataBlock[] dataBlocks = new DataBlock[0];
         public static ulong dataBlocksBufferedMemoryAmount = 0;
-        public static ulong maxMemoryForDataBlocksBuffer = 1024 * 1024 * 100; //500 mb
+        public static ulong maxMemoryForDataBlocksBuffer = 1024 * 1024 * 100; //100 mb
 
         public static List<long> headersFound = new List< long >();
         public static bool readyToWrite;
@@ -67,49 +67,34 @@ namespace VeeamTest
 
             if ( args [ 0 ].Equals( "decompress", StringComparison.InvariantCultureIgnoreCase ) )
             {
-                //ReadCompressed( args[ 1 ] );
-                string[] strings = args;
-                thread_Read = new Thread(()=> ReadCompressedFile(strings [ 1 ]));
+                thread_Read = new Thread(()=> ReadCompressedFile( args [ 1 ]));
                 thread_Read.IsBackground = true;
                 thread_Read.Start( );
-
-
-                //Decompress( args [ 1 ], args [ 2 ] );
-
-                string outputFileName = args[ 1 ].Replace( ".gz", "" );
-                if ( args.Length > 2 )
-                {
-                    outputFileName = args [ 2 ];
-                }
-                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(outputFileName, strings[1]) );
+                
+                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(
+                    args [ 1 ].Replace( ".gz", "" ),
+                    args [ 1 ]) 
+                    );
                 thread_Write.IsBackground = true;
                 thread_Write.Start( );
+
+                Console.WriteLine( "Decompressing of " + args [ 1 ] + " Started..." );
             }
             if ( args [ 0 ].Equals( "compress", StringComparison.InvariantCultureIgnoreCase ) )
             {
-                //Compress( args [ 1 ], args [ 2 ] );
-                string[] strings = args;
-
-                thread_Read = new Thread( ()=>ReadNotCompressedFile(strings[1]) );
+                thread_Read = new Thread( ()=>ReadNotCompressedFile( args [ 1]) );
                 thread_Read.IsBackground = true;
                 thread_Read.Start();
-
-
-                string outputFileName = args[ 1 ]+".gz";
-                if ( args.Length > 2 )
-                {
-                    outputFileName = args [ 2 ];
-                }
-                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(outputFileName, strings[1]) );
+                
+                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile( args [ 2 ], args [ 1 ]) );
                 thread_Write.IsBackground = true;
                 thread_Write.Start( );
-
-
-                //WriteCompressedDataTheaded( args [ 2 ] );
+                
+                Console.WriteLine( "Compression of " + args [ 1 ] + " Started..." );
             }
 
 
-            if( thread_Read != null && thread_Write !=null)
+            if ( thread_Read != null && thread_Write !=null)
             {
                 while( thread_Read.IsAlive || thread_Write.IsAlive )
                 {
@@ -345,9 +330,7 @@ namespace VeeamTest
 
         }
 
-
-
-
+       
         #region Utils
 
         static void ShowInfo ()

@@ -148,15 +148,21 @@ namespace VeeamTest
         }
 
 
+        /// <summary>
+        /// This method will read GZip headers per byte
+        /// keys based on http://www.zlib.org/rfc-gzip.html
+        /// </summary>
+        /// <param name="readFileStream"></param>
+        /// <param name="index"></param>
+        /// <returns></returns>
         public static int ReadHeaders( FileStream readFileStream, ulong index )
         {
             byte[] bufferGZipHeader = new byte[6];
-            var buffer = new byte[Program.BufferSize + bufferGZipHeader.Length*2 ]; // read offset for byte mask size for start/end.  5b+data+5b
-            //long currPos = 0;
-            //long diff = 0;
+            var buffer = new byte[Program.BufferSize + bufferGZipHeader.Length*2 ]; // read offset for byte mask size for start/end.  6b+data+6b
             List<long> headers = new List< long >();
 
             ulong startReadPosition = index * ( ulong )buffer.Length;
+
             //if read position not at 0 => offset position
             if( startReadPosition > ( ulong )bufferGZipHeader.Length ) startReadPosition -= (ulong)bufferGZipHeader.Length;
 
@@ -169,7 +175,6 @@ namespace VeeamTest
             //Read headers
             for ( ulong i = 0; i < (ulong)buffer.Length; i++ )
             {
-                
                 #region Read Header
 
                 for ( ulong j = 0; j < (ulong)bufferGZipHeader.Length; j++ )
@@ -184,7 +189,7 @@ namespace VeeamTest
 
 
                 //Check header and if true => decompress block
-                if ( bufferGZipHeader [ 0 ] == 0x1F
+                if (    bufferGZipHeader [ 0 ] == 0x1F
                      && bufferGZipHeader [ 1 ] == 0x8B
                      && bufferGZipHeader [ 2 ] == 0x08
                      && bufferGZipHeader [ 3 ] == 0x00
@@ -193,21 +198,13 @@ namespace VeeamTest
                 )
                 {
                     var newHeader = startReadPosition + i;
-
-                    #region Checking
-
-                    //if ( Program.headersFound.Contains( (long)newHeader ) ) continue;
-
-                    #endregion
-
                     headers.Add( (long)newHeader );
-/*                    lock ( threadLock )
-                    {
-                        Program.headersFound.Add( ( long ) newHeader );
-                    }*/
+
                     //Console.Write( " H "+ Program.headersFound.Count  );
                 }
             }
+
+            //write headers sync
             lock ( threadLock_headersRead )
             {
                 Program.headersFound.AddRange( headers );
