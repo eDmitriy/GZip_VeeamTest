@@ -28,9 +28,12 @@ namespace VeeamTest
         static DateTime startTime;
         private static string currOperation = "";
 
+
+        public static Writer _outFileWriter = null;
+
         #endregion
 
-        
+
 
         static void Main ( string [] args )
         {
@@ -52,9 +55,13 @@ namespace VeeamTest
 
             catch ( Exception ex )
             {
-                Console.WriteLine( "Error is occured!\n Method: {0}\n Error description {1}", ex.TargetSite, ex.Message );
+                Console.WriteLine( "Error is occured!\n Method: {0}\n Error description: {1}", ex.TargetSite, ex.Message );
                 //return 1;
             }
+
+
+            Console.WriteLine( string.Format( "\nCompleted in {0} seconds", ( DateTime.Now - startTime ).TotalSeconds ) );
+
             Console.WriteLine("\nPress any key to exit!" );
             Console.ReadKey();
         }
@@ -75,12 +82,12 @@ namespace VeeamTest
                 thread_Read.IsBackground = true;
                 thread_Read.Start( );
                 
-                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(
-                    args [ 2 ]/*.Replace( ".gz", "" )*/,
+/*                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile(
+                    args [ 2 ]/*.Replace( ".gz", "" )#1#,
                     args [ 1 ]) 
                     );
                 thread_Write.IsBackground = true;
-                thread_Write.Start( );
+                thread_Write.Start( );*/
             }
             if ( args [ 0 ].Equals( "compress", StringComparison.InvariantCultureIgnoreCase ) )
             {
@@ -88,19 +95,27 @@ namespace VeeamTest
                 thread_Read.IsBackground = true;
                 thread_Read.Start();
                 
-                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile( args [ 2 ], args [ 1 ]) );
+/*                thread_Write = new Thread( ()=> WriteDataBlocksToOutputFile( args [ 2 ], args [ 1 ]) );
                 thread_Write.IsBackground = true;
-                thread_Write.Start( );
+                thread_Write.Start( );*/
             }
 
 
-            if ( thread_Read != null && thread_Write !=null)
+            _outFileWriter = new Writer( args [ 2 ], args [ 1 ] );
+            _outFileWriter.RunWorkerAsync();
+            _outFileWriter.WorkerSupportsCancellation = true;
+
+
+
+            if ( thread_Read != null /*&& thread_Write !=null*/)
             {
-                while( thread_Read.IsAlive || thread_Write.IsAlive )
+                while( thread_Read.IsAlive /*|| thread_Write.IsAlive*/  || _outFileWriter.GetQueueCount()>0 )
                 {
                     Thread.Sleep( 10 );
                 }
             }
+            if( _outFileWriter .IsBusy) _outFileWriter.CancelAsync();
+
             return 0;
         }
 
@@ -139,8 +154,8 @@ namespace VeeamTest
             {
                 //CompressionThread gZipThread = new CompressionThread(inputFileInfo, threadCount, i);
                 ThreadedReader gZipThread = new ThreadedReader(
-                    inputFileInfo, threadCount, i, 
-                    ThreadedReader.ReadBytesBlockForCompression
+                    inputFileInfo, threadCount, i, ThreadedReader.WorkType.readNotCompressed
+                    //ThreadedReader.ReadBytesBlockForCompression
                     );
 
                 gZipThreads.Add( gZipThread );
@@ -168,7 +183,7 @@ namespace VeeamTest
             try
             {
                 FileInfo fileToDecompress = new FileInfo( fileName );
-                if ( fileToDecompress.Extension != ".gz" ) return;
+                //if ( fileToDecompress.Extension != ".gz" ) return;
 
 
                 #region Read Headers from compressed input file
@@ -189,9 +204,8 @@ namespace VeeamTest
                 for ( int i = 0; i < threadCount; i++ )
                 {
                     ThreadedReader gZipThread = new ThreadedReader(
-                    fileToDecompress, threadCount, i,
-                    ThreadedReader.ReadHeaders
-                    //, true
+                    fileToDecompress, threadCount, i, ThreadedReader.WorkType.readHeaders
+                    //ThreadedReader.ReadHeaders
                 );
                     gZipThreads_Headers.Add( gZipThread );
                 }
@@ -251,8 +265,8 @@ namespace VeeamTest
                 for ( int i = 0; i < threadCount; i++ )
                 {
                     ThreadedReader gZipThread = new ThreadedReader(
-                    fileToDecompress, threadCount, i,
-                    ThreadedReader.ReadBytesBlockForDecompression
+                        fileToDecompress, threadCount, i, ThreadedReader.WorkType.readCompressed
+                        //ThreadedReader.ReadBytesBlockForDecompression
                     );
                     gZipThreads.Add( gZipThread );
                 }
@@ -261,7 +275,7 @@ namespace VeeamTest
                 //wait for threads
                 while ( gZipThreads.Any( v => !v.Finished ) )
                 {
-                    Thread.Sleep( 100 );
+                    Thread.Sleep( 10 );
                 }
 
                 gZipThreads.Clear();
@@ -302,16 +316,16 @@ namespace VeeamTest
                     DataBlock dataBlock = dataBlocks[ i ];
 
                     /* wait for dataBlock bytes ready */
-                    while ( dataBlock.byteData == null )
+                    while ( dataBlock.ByteData == null )
                     {
                         Thread.Sleep( 10 );
                     }
                     
 
-                    outFileStream.Write( dataBlock.byteData, 0, dataBlock.byteData.Length );
+                    outFileStream.Write( dataBlock.ByteData, 0, dataBlock.ByteData.Length );
 
-                    dataBlocksBufferedMemoryAmount -= ( ulong )dataBlock.byteData.Length;
-                    dataBlock.byteData = new byte[0];
+                    dataBlocksBufferedMemoryAmount -= ( ulong )dataBlock.ByteData.Length;
+                    dataBlock.ByteData = new byte[0];
                     lastWritedDataBlockIndex = i;
 
 
@@ -394,13 +408,4 @@ namespace VeeamTest
         #endregion
 
     }
-}
-
-
-public class DataBlock
-{
-    public long startIndex;
-    public long endIndex;
-
-    public byte[] byteData;
 }

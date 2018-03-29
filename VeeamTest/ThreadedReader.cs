@@ -13,30 +13,72 @@ namespace VeeamTest
 
         private Thread thread;
         private FileInfo inputFileInfo;
-        private int threadsCount;
+        private static int threadsCount;
         private int threadIndex;
-        private bool useLocker = false;
+
         private Func< FileStream, ulong, int > funcWork;
+        public enum WorkType
+        {
+            readCompressed,
+            readHeaders,
+            readNotCompressed
+        }
+
 
         public bool Finished { get; set; }
 
-        static object threadLock_headersRead = new object();
+
+
+        private object threadLock_headersRead = new object();
+        private object threadLock_writerQueue = new object();
+
+        private object threadLock_loop = new object();
+
+
+
+        private static int lastWriteThread;
+        public static int LastWriteThread
+        {
+            get { return lastWriteThread; }
+            set
+            {
+                lastWriteThread = value;
+                if( lastWriteThread >= threadsCount )
+                {
+                    lastWriteThread = 0;
+                }
+            }
+        }
 
         #endregion
 
 
         #region Constructors
 
-        public ThreadedReader ( FileInfo inputFileInfo, int threadsCount,
-            int threadIndex, Func<FileStream, ulong, int> funcWork )
+        public ThreadedReader ( FileInfo inputFileInfo, int threadsCountToSet,
+            int threadIndex, /*Func<FileStream, ulong, int, int> funcWork*/WorkType workType )
         {
             this.inputFileInfo = inputFileInfo;
-            this.threadsCount = threadsCount;
+            threadsCount = threadsCountToSet;
             this.threadIndex = threadIndex;
-            this.funcWork = funcWork;
+
+            switch ( workType )
+            {
+                case WorkType.readCompressed:
+                    this.funcWork = ReadBytesBlockForDecompression;
+                    break;
+                case WorkType.readNotCompressed:
+                    this.funcWork = ReadBytesBlockForCompression;
+                    break;
+                case WorkType.readHeaders:
+                    this.funcWork = ReadHeaders;
+                    break;
+
+            }
+            //this.funcWork = funcWork;
 
             thread = new Thread( DoWork );
-            thread.IsBackground = true;
+            //thread.IsBackground = true;
             thread.Name = "ThreadedReader_" + threadIndex;
             thread.Start();
         }
@@ -49,24 +91,24 @@ namespace VeeamTest
         /// </summary>
         void DoWork ()
         {
-            using ( var readFileStream = new FileStream( inputFileInfo.FullName, 
+            using ( var readFileStream = new FileStream( inputFileInfo.FullName,
                 FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
 
-                for ( ulong i = ( ulong )threadIndex; i < ( ulong )Program.dataBlocks.Length; i += ( ulong )threadsCount )
+                for ( ulong i = ( ulong ) threadIndex; i < ( ulong ) Program.dataBlocks.Length; i += ( ulong ) threadsCount )
                 {
                     #region MemoryLimit
 
-                    while( Program.dataBlocksBufferedMemoryAmount>= Program.maxMemoryForDataBlocksBuffer )
+/*                        while( Program.dataBlocksBufferedMemoryAmount >= Program.maxMemoryForDataBlocksBuffer )
                     {
-                        if(Program.lastWritedDataBlockIndex+1 == i ) break; //if writer need this block then dont sleep
-                        Thread.Sleep( 1 ); 
-                    }
+                        if( Program.lastWritedDataBlockIndex + 1 == i )
+                            break; //if writer need this block then dont sleep
+                        Thread.Sleep( 1 );
+                    }*/
 
                     #endregion
 
-
-                    if ( funcWork != null ) funcWork.Invoke( readFileStream, i );
+                    if( funcWork != null ) funcWork.Invoke( readFileStream, i);
 
                     //Console.Write( " -R " + i );
                 }
@@ -74,18 +116,19 @@ namespace VeeamTest
                 Finished = true;
                 //thread.Abort();
             }
+            
         }
         
 
 
         #region Block work
 
-        public static int ReadBytesBlockForDecompression( FileStream readFileStream, ulong index )
+        public /*static*/ int ReadBytesBlockForDecompression( FileStream readFileStream, ulong index )
         {
-            var newDataChunk = Program.dataBlocks[ index ];
-            byte[] buffer = new byte [ (newDataChunk.endIndex - newDataChunk.startIndex) ];
+            var newDataBlock = Program.dataBlocks[ index ];
+            byte[] buffer = new byte [ (newDataBlock.endIndex - newDataBlock.startIndex) ];
 
-            readFileStream.Position = newDataChunk.startIndex;
+            readFileStream.Position = newDataBlock.startIndex;
             int bytesRead = readFileStream.Read( buffer, 0, buffer.Length );
 
             //if reach end file and buffer filled with nulls
@@ -94,15 +137,35 @@ namespace VeeamTest
                 buffer = buffer.Take( bytesRead ).ToArray();
             }
 
-            newDataChunk.byteData = DeCompressDataBlock( buffer );
-            Program.dataBlocksBufferedMemoryAmount += ( ulong )newDataChunk.byteData.Length;
+            newDataBlock.DeCompressDataBlock( buffer );
+
+
+            lock ( Program._outFileWriter )
+            {
+                while ( LastWriteThread != threadIndex )
+                {
+                    //Console.Write( " -Wait " + threadIndex );
+                    Monitor.Wait( Program._outFileWriter );
+                }
+
+                
+                if ( Program._outFileWriter != null ) Program._outFileWriter.EnqueueDataBlocks( newDataBlock );
+                //Program.dataBlocksBufferedMemoryAmount += ( ulong )newDataBlock.ByteData.Length;
+
+                Console.Write( " -R " + index );
+
+
+
+                LastWriteThread++;
+                Monitor.PulseAll( Program._outFileWriter );
+            }
 
             return 0;
         }
 
-        public static int ReadBytesBlockForCompression( FileStream readFileStream, ulong index )
+        public /*static*/ int ReadBytesBlockForCompression( FileStream readFileStream, ulong index )
         {
-            var newDataChunk = Program.dataBlocks[ index ];
+            var newDataBlock = Program.dataBlocks[ index ];
             byte[] buffer = new byte [ Program.BufferSize ]; 
 
 
@@ -117,8 +180,9 @@ namespace VeeamTest
                 buffer = buffer.Take( bytesRead ).ToArray();
             }
 
-            newDataChunk.byteData = CompressDataBlock( buffer, CompressionMode.Compress );
-            Program.dataBlocksBufferedMemoryAmount += ( ulong )newDataChunk.byteData.Length;
+            newDataBlock.CompressDataBlock( buffer );
+            //if( Program._outFileWriter != null ) Program._outFileWriter.EnqueueDataBlocks( newDataBlock );
+            Program.dataBlocksBufferedMemoryAmount += ( ulong )newDataBlock.ByteData.Length;
 
 
             return 0;
@@ -131,8 +195,9 @@ namespace VeeamTest
         /// </summary>
         /// <param name="readFileStream"></param>
         /// <param name="index"></param>
+        /// <param name="threadIndex"></param>
         /// <returns></returns>
-        public static int ReadHeaders( FileStream readFileStream, ulong index )
+        public /*static*/ int ReadHeaders( FileStream readFileStream, ulong index )
         {
             byte[] bufferGZipHeader = new byte[6];
             var buffer = new byte[Program.BufferSize + bufferGZipHeader.Length*2 ]; // read offset for byte mask size for start/end.  6b+data+6b
@@ -182,7 +247,7 @@ namespace VeeamTest
             }
 
             //write headers sync
-            lock ( threadLock_headersRead )
+            lock ( Program.headersFound )
             {
                 Program.headersFound.AddRange( headers );
             }
@@ -191,52 +256,7 @@ namespace VeeamTest
 
 
         #endregion
-
-
-
-        #region DataBlock Compression And Decompression
-
-        static byte [] DeCompressDataBlock ( byte [] bytes )
-        {
-            //return bytes;
-            using ( MemoryStream mStreamOrigFile = new MemoryStream( bytes ) )
-            {
-                mStreamOrigFile.Position = 0;
-/*                var buffer = new byte[ 1024 * 1024 ];
-                int bytesRead = 0;*/
-
-                using ( MemoryStream mStream = new MemoryStream() )
-                {
-                    using ( GZipStream gZipStream = new GZipStream( mStreamOrigFile, CompressionMode.Decompress ) )
-                    {
-                        /*while ( ( bytesRead = gZipStream.Read( buffer,
-                                    0, buffer.Length ) ) > 0 )
-                        {
-                            mStream.Write( buffer, 0, bytesRead );
-                        }*/
-                        gZipStream.CopyTo( mStream );
-                    }
-                    return mStream.ToArray();
-                }
-            }
-
-        }
-
-        static byte [] CompressDataBlock ( byte [] bytes, CompressionMode compressionMode )
-        {
-            //return bytes;
-
-            using ( MemoryStream mStream = new MemoryStream() )
-            {
-                using ( GZipStream gZipStream = new GZipStream( mStream, compressionMode ) )
-                {
-                    gZipStream.Write( bytes, 0, bytes.Length );
-                }
-                return mStream.ToArray();
-            }
-        }
-
-        #endregion
+        
 
     }
 
