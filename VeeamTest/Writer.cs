@@ -16,9 +16,7 @@ namespace VeeamTest
         private string newFileName;
         private string inputFileName;
 
-        ulong dataBlocksBufferedMemoryAmount = 0;
-        ulong maxMemoryForDataBlocksBuffer = 1024 * 1024 * 100; //100 mb
-
+        public static List<long> writedIndexes = new List< long >();
 
         #endregion
 
@@ -43,16 +41,28 @@ namespace VeeamTest
         {
             lock ( dataBlocksQueue )
             {
-                while ( dataBlocksBufferedMemoryAmount >= maxMemoryForDataBlocksBuffer )
+                #region Check for duplicates
+
+                lock ( writedIndexes )
+                {
+                    if( writedIndexes.Any( v => v == dataBlock.startIndex )
+                        || dataBlocksQueue.Any( v => v.startIndex == dataBlock.startIndex )
+                    )
+                    {
+                        //Console.WriteLine("  !!! DUPLICATE !!! "+ dataBlock.startIndex );
+                        return;
+                    }
+                }
+
+                #endregion
+
+                //wait for queue writing
+                while ( GetQueueCount() >4  )
                 {
                     Monitor.Wait( dataBlocksQueue );
                 }
 
-                if ( /*dataBlocksQueue.Count( v => v != null && v.Equals( dataBlock ) ) == 0 */true)
-                {
-                    dataBlocksQueue.Enqueue( dataBlock );
-                    dataBlocksBufferedMemoryAmount += ( ulong )dataBlock.ByteData.Length;
-                }
+                dataBlocksQueue.Enqueue( dataBlock );
             }
         }
 
@@ -66,12 +76,9 @@ namespace VeeamTest
 
 
 
-        void WriteDataBlocksToOutputFile ( object sender, DoWorkEventArgs e )//( string newFileName, string inputFileName )
+        void WriteDataBlocksToOutputFile ( object sender, DoWorkEventArgs e )
         {
             FileInfo outFileInfo = new FileInfo( newFileName );
-            FileInfo inputFileInfo = new FileInfo( inputFileName );
-            ulong counter = 0;
-
 
             //write every dataBlock continuously or wait for dataBlock become ready
             using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
@@ -82,7 +89,7 @@ namespace VeeamTest
                 while ( true )
                 {
                     //wait dataBlock for write 
-                    while ( dataBlocksQueue.Count==0 )
+                    while ( GetQueueCount()==0 )
                     {
                         Thread.Sleep( 10 );
                     }
@@ -93,17 +100,16 @@ namespace VeeamTest
                         dataBlock = dataBlocksQueue.Dequeue();
                         Monitor.PulseAll( dataBlocksQueue );
                     }
+
+                    lock ( writedIndexes ) writedIndexes.Add( dataBlock.startIndex );
+
                     if ( dataBlock==null || dataBlock.ByteData==null || dataBlock.ByteData.Length==0) continue;
 
                     
                     outFileStream.Write( dataBlock.ByteData, 0, dataBlock.ByteData.Length );
 
-
-
-                    dataBlocksBufferedMemoryAmount -= (ulong)dataBlock.ByteData.Length;
+                    
                     dataBlock.ByteData = new byte [ 0 ];
-                    dataBlock = null;
-
                     //Console.Write( " -W " /*+ ++counter*/+ dataBlock.startIndex.ToString("C0") );
                 }
 

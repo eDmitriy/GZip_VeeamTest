@@ -16,19 +16,11 @@ namespace VeeamTest
         protected FileInfo inputFileInfo;
         protected static int threadsCount;
         protected int threadIndex;
-        //protected Func< FileStream, ulong, int > funcWork;
-
-        public enum WorkType
-        {
-            readCompressed,
-            readHeaders,
-            readNotCompressed
-        }
 
 
         public bool Finished { get; set; }
 
-        protected static List<ThreadedReader> registeredReaders = new List< ThreadedReader >();
+        public static List<ThreadedReader> registeredReaders = new List< ThreadedReader >();
 
         
         #region NextWriteThread
@@ -71,6 +63,8 @@ namespace VeeamTest
 
         #endregion
 
+        static object progreesLogLocker = new object();
+
         #endregion
 
 
@@ -83,20 +77,6 @@ namespace VeeamTest
             threadsCount = threadsCountToSet;
             this.threadIndex = threadIndex;
 
-            /*            switch ( workType )
-                        {
-                            case WorkType.readCompressed:
-                                this.funcWork = ReadBytesBlockForDecompression;
-                                break;
-                            case WorkType.readNotCompressed:
-                                this.funcWork = ReadBytesBlockForCompression;
-                                break;
-                            case WorkType.readHeaders:
-                                this.funcWork = ReadHeaders;
-                                break;
-
-                        }*/
-            //this.funcWork = funcWork;
 
             registeredReaders.Add( this );
             this.writer = Program._outFileWriter;
@@ -123,6 +103,15 @@ namespace VeeamTest
                 {
                     AddDataBlocksToWriterQueue( ReadDataBlocks( readFileStream, i ) );
                     //Console.Write( " -R " + i );
+
+
+                    lock ( progreesLogLocker )
+                    {
+                        Program.ClearCurrentConsoleLine();
+                        Console.Write( "-%" 
+                            + ( ( ( float )i / ( float )Program.dataBlocks.Length ) * 100 ).ToString( "F" ) 
+                            + ".  index = " + i );
+                    }
                 }
 
                 Finished = true;
@@ -283,7 +272,7 @@ namespace VeeamTest
 
                 #endregion
 
-                Console.Write( " -R +" + index + "_" + i + "+ thrInd= " + threadIndex );
+                //Console.Write( " -R +" + index + "_" + i + "+ thrInd= " + threadIndex );
             }
 
             #endregion
@@ -292,75 +281,11 @@ namespace VeeamTest
         }
 
 
-
-        /*   public /*static#1# int ReadBytesBlockForDecompression ( FileStream readFileStream, ulong index )
-           {
-               var newDataBlock = Program.dataBlocks[ index ];
-               byte[] buffer = new byte [ (newDataBlock.endIndex - newDataBlock.startIndex) ];
-
-               readFileStream.Position = newDataBlock.startIndex;
-               int bytesRead = readFileStream.Read( buffer, 0, buffer.Length );
-
-               //if reach end file and buffer filled with nulls
-               if ( bytesRead < buffer.Length )
-               {
-                   buffer = buffer.Take( bytesRead ).ToArray();
-               }
-
-               newDataBlock.DeCompressDataBlock( buffer );
-
-
-               lock ( Program._outFileWriter )
-               {
-                   while ( LastWriteThread != threadIndex )
-                   {
-                       //Console.Write( " -Wait " + threadIndex );
-                       Monitor.Wait( Program._outFileWriter );
-                   }
-
-
-                   if ( Program._outFileWriter != null ) Program._outFileWriter.EnqueueDataBlocks( newDataBlock );
-                   //Program.dataBlocksBufferedMemoryAmount += ( ulong )newDataBlock.ByteData.Length;
-
-                   Console.Write( " -R " + index );
-
-
-
-                   LastWriteThread++;
-                   Monitor.PulseAll( Program._outFileWriter );
-               }
-
-               return 0;
-           }*/
-
-        public int DataBlockToWriteQueue ( DataBlock newDataBlock )
-        {
-            if ( writer == null ) return 0;
-            writer.EnqueueDataBlocks( newDataBlock );
-
-            /*        lock ( writer )
-                    {
-                        while ( NextWriteThreadIndex != threadIndex )
-                        {
-                            //Console.Write( " -Wait " + threadIndex );
-                            Monitor.Wait( writer );
-                        }
-
-                        writer.EnqueueDataBlocks( newDataBlock );
-
-                        //Console.Write( " -R +" + index/*newDataBlock.startIndex#1# + "+ thrInd= "+threadIndex);
-
-                        IncreaseNextWriteThreadIndex();
-                        Monitor.PulseAll( writer );
-                    }*/
-
-            return 0;
-        }
-
         #endregion
 
 
         #region Headers
+        
 
         /// <summary>
         /// This method will read GZip headers per byte
@@ -370,64 +295,6 @@ namespace VeeamTest
         /// <param name="index"></param>
         /// <param name="threadIndex"></param>
         /// <returns></returns>
-        public int ReadHeaders ( FileStream readFileStream, ulong index )
-        {
-            //byte[] bufferGZipHeader = new byte[6];
-            var buffer = new byte[Program.BufferSize + bufferGZipHeader.Length*2 ]; // read offset for byte mask size for start/end.  6b+data+6b
-            List<long> headers = new List< long >();
-
-            ulong startReadPosition = index * ( ulong )buffer.Length;
-
-            //if read position not at 0 => offset position
-            if ( startReadPosition > ( ulong )bufferGZipHeader.Length ) startReadPosition -= ( ulong )bufferGZipHeader.Length;
-
-            //read from file
-            readFileStream.Position = ( long )startReadPosition;
-            readFileStream.Read( buffer, 0, buffer.Length );
-
-
-
-            //Read headers
-            for ( ulong i = 0; i < ( ulong )buffer.Length; i++ )
-            {
-                #region Read Header
-
-                for ( ulong j = 0; j < ( ulong )bufferGZipHeader.Length; j++ )
-                {
-                    if ( ( ulong )buffer.Length > i + j ) //check for i+j < bufferAllFile.Lenght
-                    {
-                        bufferGZipHeader [ j ] = buffer [ i + j ];
-                    }
-                }
-
-                #endregion
-
-
-                //Check header and if true => decompress block
-                if ( bufferGZipHeader [ 0 ] == 0x1F
-                        && bufferGZipHeader [ 1 ] == 0x8B
-                        && bufferGZipHeader [ 2 ] == 0x08
-                        && bufferGZipHeader [ 3 ] == 0x00
-                        && bufferGZipHeader [ 4 ] == 0x00
-                        && bufferGZipHeader [ 5 ] == 0x00
-                )
-                {
-                    var newHeader = startReadPosition + i;
-                    headers.Add( ( long )newHeader );
-
-                    //Console.Write( " H "+ Program.headersFound.Count  );
-                }
-            }
-
-            //write headers sync
-            lock ( headersFound )
-            {
-                headersFound.AddRange( headers );
-            }
-            return 0;
-        }
-
-
         public List<long> ReadHeaders ( byte [] buffer, long endIndexInBuffer, long startReadPositionIndex )
         {
             List<long> headers = new List< long >();

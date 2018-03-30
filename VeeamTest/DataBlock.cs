@@ -18,43 +18,6 @@ namespace VeeamTest
 
         #region Public Methods
 
-        public void DeCompressDataBlock ( byte[] bytes )
-        {
-            using ( MemoryStream mStreamOrigFile = new MemoryStream( bytes ) )
-            {
-                mStreamOrigFile.Position = 0;
-
-                using ( MemoryStream mStream = new MemoryStream() )
-                {
-                    using ( GZipStream gZipStream = new GZipStream( mStreamOrigFile, CompressionMode.Decompress ) )
-                    {
-                        gZipStream.CopyTo( mStream );
-                    }
-                    ByteData = mStream.ToArray();
-
-                    //return (ulong)ByteData.Length;
-                }
-            }
-        }
-
-        public void DeCompressDataBlock (  )
-        {
-            using ( MemoryStream mStreamOrigFile = new MemoryStream( ByteData ) )
-            {
-                mStreamOrigFile.Position = 0;
-
-                using ( MemoryStream mStream = new MemoryStream() )
-                {
-                    using ( GZipStream gZipStream = new GZipStream( mStreamOrigFile, CompressionMode.Decompress ) )
-                    {
-                        gZipStream.CopyTo( mStream );
-                    }
-                    ByteData = mStream.ToArray();
-
-                    //return (ulong)ByteData.Length;
-                }
-            }
-        }
         public void DeCompressDataBlock (byte[] bytes,  long startIndex)
         {
             using ( MemoryStream mStreamOrigFile = new MemoryStream( bytes ) )
@@ -74,24 +37,6 @@ namespace VeeamTest
             }
         }
 
-        public void DeCompressDataBlock (FileStream fileStream)
-        {
-            fileStream.Position = startIndex;
-
-            using ( MemoryStream mStream = new MemoryStream() )
-            {
-                using ( GZipStream gZipStream = new GZipStream( fileStream, CompressionMode.Decompress, true ) )
-                {
-                    gZipStream.CopyTo( mStream );
-                }
-                ByteData = mStream.ToArray();
-
-                //return (ulong)ByteData.Length;
-            }
-        }
-
-
-
 
 
         public void CompressDataBlock ( byte [] bytes )
@@ -109,7 +54,7 @@ namespace VeeamTest
         }
 
 
-        public bool Equals ( /*DataBlock dataBlockA, */DataBlock dataBlockB )
+        public bool Equals ( DataBlock dataBlockB )
         {
             if ( this == null || dataBlockB == null ) return false;
 
