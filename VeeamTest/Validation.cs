@@ -86,12 +86,12 @@ namespace VeeamTest
 
         public static void HardwareValidation()
         {
-            ulong minFreeMemory =  (ulong)(Program.threadCount * 125*(1024*1024)) + Program.maxMemoryForDataBlocksBuffer ;
+/*            ulong minFreeMemory =  (ulong)(Program.threadCount * 125*(1024*1024)) + Program.maxMemoryForDataBlocksBuffer ;
             //Console.WriteLine( "MinFreeMemory = " + minFreeMemory / ( 1024 * 1024 ) );
             if ( new ComputerInfo().AvailableVirtualMemory < minFreeMemory )
             {
                 throw new Exception( "This program requires at least " + ( minFreeMemory / ( 1024 * 1024 ) ) + " mb of free RAM" );
-            }
+            }*/
         }
     }
 }
