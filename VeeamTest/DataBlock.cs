@@ -10,7 +10,7 @@ namespace VeeamTest
     public class DataBlock
     {
         public long startIndex;
-        public long endIndex;
+        //public long endIndex;
 
         public byte[] ByteData { get; set; }
 
@@ -31,8 +31,6 @@ namespace VeeamTest
                         gZipStream.CopyTo( mStream );
                     }
                     ByteData = mStream.ToArray();
-
-                    //return (ulong)ByteData.Length;
                 }
             }
         }
@@ -59,7 +57,7 @@ namespace VeeamTest
             if ( this == null || dataBlockB == null ) return false;
 
             return this.startIndex == dataBlockB.startIndex
-                   && this.endIndex == dataBlockB.endIndex;
+                   /*&& this.endIndex == dataBlockB.endIndex*/;
         }
 
         #endregion

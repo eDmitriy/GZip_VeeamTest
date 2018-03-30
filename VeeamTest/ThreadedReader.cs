@@ -1,21 +1,28 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
 
 namespace VeeamTest
 {
-    public class ThreadedReader
+    public class ThreadedReader : BackgroundWorker
     {
         #region Vars
 
-        protected Writer writer;
+        public class ThreadedReaderParameters
+        {
+            public Writer writer;
+            public FileInfo inputFileInfo;
+            public ulong iterationsTotalCount;
+            public int threadIndex;
+            public int threadsCount;
+            public long bufferSize;
+        }
 
         protected Thread thread;
-        protected FileInfo inputFileInfo;
-        protected static int threadsCount;
-        protected int threadIndex;
+        protected ThreadedReaderParameters parameters;
 
 
         public bool Finished { get; set; }
@@ -23,7 +30,7 @@ namespace VeeamTest
         public static List<ThreadedReader> registeredReaders = new List< ThreadedReader >();
 
         
-        #region NextWriteThread
+        #region NextWriteThreadIndex
 
         protected static int NextWriteThreadIndex { get; set; }
 
@@ -32,14 +39,14 @@ namespace VeeamTest
             int startValue = NextWriteThreadIndex;
 
             NextWriteThreadIndex++;
-            if ( NextWriteThreadIndex == threadsCount )
+            if ( NextWriteThreadIndex == parameters.threadsCount )
             {
                 NextWriteThreadIndex = 0;
             }
             while( registeredReaders[ NextWriteThreadIndex ].Finished && NextWriteThreadIndex != startValue )
             {
                 NextWriteThreadIndex++;
-                if ( NextWriteThreadIndex == threadsCount )
+                if ( NextWriteThreadIndex == parameters.threadsCount )
                 {
                     NextWriteThreadIndex = 0;
                 }
@@ -48,43 +55,30 @@ namespace VeeamTest
             return NextWriteThreadIndex;
         }
 
-/*        protected static int LastWriteThread
-        {
-            get { return lastWriteThread; }
-            set
-            {
-                lastWriteThread = value;
-                if( lastWriteThread >= threadsCount )
-                {
-                    lastWriteThread = 0;
-                }
-            }
-        }*/
+
 
         #endregion
 
-        static object progreesLogLocker = new object();
+        static object progresLogLocker = new object();
 
         #endregion
 
 
         #region Constructors
 
-        public ThreadedReader ( FileInfo inputFileInfo, int threadsCountToSet,
-            int threadIndex )
+        public ThreadedReader ( ThreadedReaderParameters parameters)
         {
-            this.inputFileInfo = inputFileInfo;
-            threadsCount = threadsCountToSet;
-            this.threadIndex = threadIndex;
-
+            this.parameters = parameters;
 
             registeredReaders.Add( this );
-            this.writer = Program._outFileWriter;
 
-            thread = new Thread( Loop );
+            DoWork += Loop;
+            WorkerSupportsCancellation = true;
+
+/*            thread = new Thread( Loop );
             thread.IsBackground = true;
-            thread.Name = "ThreadedReader_" + threadIndex;
-            thread.Start();
+            thread.Name = "ThreadedReader_" + parameters.threadIndex;
+            thread.Start();*/
         }
 
         #endregion
@@ -93,36 +87,39 @@ namespace VeeamTest
         /// <summary>
         /// This method will loop dataBlocks array and send them for a further processing
         /// </summary>
-        void Loop ()
+        void Loop ( object sender, DoWorkEventArgs e )
         {
-            using ( var readFileStream = new FileStream( inputFileInfo.FullName,
+            if ( Thread.CurrentThread.Name == null )
+                Thread.CurrentThread.Name = "ThreadedReader_" + parameters.threadIndex;
+
+
+            using ( var readFileStream = new FileStream( parameters.inputFileInfo.FullName,
                 FileMode.Open, FileAccess.Read, FileShare.Read ) )
             {
 
-                for ( ulong i = ( ulong ) threadIndex; i < ( ulong ) Program.dataBlocks.Length; i += ( ulong ) threadsCount )
+                for ( ulong i = ( ulong )parameters.threadIndex; i < parameters.iterationsTotalCount; i += ( ulong )parameters.threadsCount )
                 {
                     AddDataBlocksToWriterQueue( ReadDataBlocks( readFileStream, i ) );
-                    //Console.Write( " -R " + i );
 
 
-                    lock ( progreesLogLocker )
+                    lock ( progresLogLocker )
                     {
                         Program.ClearCurrentConsoleLine();
                         Console.Write( "-%" 
-                            + ( ( ( float )i / ( float )Program.dataBlocks.Length ) * 100 ).ToString( "F" ) 
+                            + ( ( ( float )i / ( float )parameters.iterationsTotalCount ) * 100 ).ToString( "F" ) 
                             + ".  index = " + i );
                     }
                 }
 
                 Finished = true;
                 //Console.WriteLine( "\n\n ThrReader #-"+threadIndex + " finished! \n\n");
-                //thread.Abort();
             }
-            
         }
 
 
 
+
+        #region Basic Methods
 
         protected virtual List<DataBlock> ReadDataBlocks ( FileStream readFileStream, ulong index )
         {
@@ -136,7 +133,7 @@ namespace VeeamTest
 
         protected virtual byte[] ReadFileBlockFromStream ( FileStream readFileStream, ulong index )
         {
-            byte[] buffer = new byte [ Program.BufferSize ];
+            byte[] buffer = new byte [ parameters.bufferSize ];
 
 
             ulong startReadPosition = index * ( ulong )buffer.Length;
@@ -155,26 +152,31 @@ namespace VeeamTest
 
         protected void AddDataBlocksToWriterQueue( List< DataBlock > dataBlocks )
         {
-            lock ( writer )
+            if( parameters.writer==null) return;
+
+            lock ( parameters.writer )
             {
                 //wait for right threadIndex
-                while ( NextWriteThreadIndex != threadIndex )
+                while ( NextWriteThreadIndex != parameters.threadIndex )
                 {
                     //Console.Write( " -Wait " + threadIndex );
-                    Monitor.Wait( writer );
+                    Monitor.Wait( parameters.writer );
                 }
 
                 //add blocks to write queue
                 foreach ( DataBlock dataBlock in dataBlocks )
                 {
                     //DataBlockToWriteQueue( dataBlock );
-                    if ( writer != null ) writer.EnqueueDataBlocks( dataBlock );
+                    if ( parameters.writer != null ) parameters.writer.EnqueueDataBlocks( dataBlock );
                 }
 
                 IncreaseNextWriteThreadIndex();
-                Monitor.PulseAll( writer );
+                Monitor.PulseAll( parameters.writer );
             }
         }
+
+        #endregion
+
 
     }
 
@@ -192,8 +194,8 @@ namespace VeeamTest
 
         #region Constructor
 
-        public DecompressReader ( FileInfo inputFileInfo, int threadsCountToSet, int threadIndex )
-            : base( inputFileInfo, threadsCountToSet, threadIndex )
+
+        public DecompressReader ( ThreadedReaderParameters parameters ): base( parameters )
         {
         }
 
@@ -223,12 +225,11 @@ namespace VeeamTest
 
             #region ReadFileToBuffer
 
-            var buffer = new byte[Program.BufferSize*2 ]; // memory buffer offset 2X block size
-            long headersReadBufferEndIndex = Program.BufferSize + bufferGZipHeader.Length * 2;
-            //byte[] buffer = new byte [ Program.BufferSize ];
+            var buffer = new byte[parameters.bufferSize*2 ]; // memory buffer offset 2X block size
+            long headersReadBufferEndIndex = parameters.bufferSize + bufferGZipHeader.Length * 2;
 
 
-            long startReadPositionIndex = (long)index * Program.BufferSize;
+            long startReadPositionIndex = (long)index * parameters.bufferSize;
             if ( startReadPositionIndex >= bufferGZipHeader.Length ) startReadPositionIndex -= bufferGZipHeader.Length;
 
             readFileStream.Position = ( long )startReadPositionIndex;
@@ -246,7 +247,7 @@ namespace VeeamTest
             
             #region foreach of headers create datablock and decompress. Then add block to write queue
 
-            long startIndex, endIndex = 0;
+            long startIndex = 0;
 
             //create and decompress blocks 
             for ( int i = 0; i < headers.Count; i++ )
@@ -254,19 +255,18 @@ namespace VeeamTest
                 #region Create new dataBlock
 
                 startIndex = headers [ i ];
-                endIndex = i + 1 < headers.Count ? headers [ i + 1 ] : buffer.Length + 1;
+                //endIndex = i + 1 < headers.Count ? headers [ i + 1 ] : buffer.Length + 1;
 
                 DataBlock newDataBlock = new DataBlock
                 {
                     startIndex = startIndex,
-                    endIndex = endIndex
+                    //endIndex = endIndex
                 };
 
                 #endregion
 
                 #region Decompress
 
-                //newDataBlock.ByteData = TakeBytesBetweenIndexes( buffer, startIndex - ( long )startReadPosition ,  endIndex - ( long )startReadPosition  );
                 newDataBlock.DeCompressDataBlock( buffer, startIndex - startReadPositionIndex );
                 dataBlocks.Add( newDataBlock );
 
@@ -340,16 +340,18 @@ namespace VeeamTest
         
     }
 
-
-
+    
 
     public class CompressReader : ThreadedReader
     {
-        public CompressReader ( FileInfo inputFileInfo, int threadsCountToSet, int threadIndex ) : base( inputFileInfo, threadsCountToSet, threadIndex )
+        #region Constructor
+
+        public CompressReader ( ThreadedReaderParameters parameters ) : base( parameters )
         {
         }
 
-
+        #endregion
+        
 
         #region Overrides of ThreadedReader
 

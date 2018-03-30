@@ -14,7 +14,6 @@ namespace VeeamTest
 
         private Queue<DataBlock> dataBlocksQueue = new Queue< DataBlock >();
         private string newFileName;
-        private string inputFileName;
 
         public static List<long> writedIndexes = new List< long >();
 
@@ -24,11 +23,11 @@ namespace VeeamTest
 
         #region Constructor
 
-        public Writer ( string newFileName, string inputFileName )
+        public Writer ( string newFileName )
         {
             this.newFileName = newFileName;
-            this.inputFileName = inputFileName;
 
+            WorkerSupportsCancellation = true;
             DoWork += WriteDataBlocksToOutputFile;
         }
 
@@ -78,6 +77,7 @@ namespace VeeamTest
 
         void WriteDataBlocksToOutputFile ( object sender, DoWorkEventArgs e )
         {
+            if ( Thread.CurrentThread.Name == null ) Thread.CurrentThread.Name = "ThreadedWriter";
             FileInfo outFileInfo = new FileInfo( newFileName );
 
             //write every dataBlock continuously or wait for dataBlock become ready
@@ -95,21 +95,24 @@ namespace VeeamTest
                     }
 
 
+                    #region Dequeue
+
                     lock ( dataBlocksQueue )
                     {
                         dataBlock = dataBlocksQueue.Dequeue();
                         Monitor.PulseAll( dataBlocksQueue );
                     }
-
-                    lock ( writedIndexes ) writedIndexes.Add( dataBlock.startIndex );
-
                     if ( dataBlock==null || dataBlock.ByteData==null || dataBlock.ByteData.Length==0) continue;
 
-                    
+                    #endregion
+
+
+                    //write
                     outFileStream.Write( dataBlock.ByteData, 0, dataBlock.ByteData.Length );
 
-                    
+
                     dataBlock.ByteData = new byte [ 0 ];
+                    lock ( writedIndexes ) writedIndexes.Add( dataBlock.startIndex );
                     //Console.Write( " -W " /*+ ++counter*/+ dataBlock.startIndex.ToString("C0") );
                 }
 

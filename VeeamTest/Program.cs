@@ -12,29 +12,28 @@ namespace VeeamTest
     {
         #region Vars
 
-        public static int threadCount = Environment.ProcessorCount;
-        public static readonly long BufferSize = 1024*1024;
+        private int threadCount = Environment.ProcessorCount;
+        private readonly long BufferSize = 1024*1024;
 
+        private DateTime startTime;
+        private string currOperation = "";
 
-        public static DataBlock[] dataBlocks = new DataBlock[0];
-        //public static ulong dataBlocksBufferedMemoryAmount = 0;
-        //public static ulong maxMemoryForDataBlocksBuffer = 1024 * 1024 * 100; //100 mb
-
-        //public static List<long> headersFound = new List< long >();
-
-
-
-        static DateTime startTime;
-        private static string currOperation = "";
-        public static bool readEnded;
-
-        public static Writer _outFileWriter = null;
+        private Writer outFileWriter = null;
 
         #endregion
 
 
 
         static void Main ( string [] args )
+        {
+            var program = new Program();
+            program.DoWork( args );
+        }
+
+
+
+
+        public void DoWork( string [] args )
         {
             Console.CancelKeyPress += new ConsoleCancelEventHandler( CancelKeyPress );
             ShowInfo();
@@ -47,9 +46,9 @@ namespace VeeamTest
                 Validation.StringReadValidation( args );
 
                 #endregion
-                
+
                 startTime = DateTime.Now;
-                CreateWorkers(  args );
+                CreateWorkers( args );
             }
 
             catch ( Exception ex )
@@ -67,12 +66,12 @@ namespace VeeamTest
 
             #endregion
 
-            Console.WriteLine("\nPress any key to exit!" );
+            Console.WriteLine( "\nPress any key to exit!" );
             Console.ReadKey();
         }
 
         
-        static int CreateWorkers( string[] args )
+        int CreateWorkers( string[] args )
         {
             currOperation = args[ 0 ].ToLower();
             Console.WriteLine( "\n\n"+currOperation + "ion of " + args [ 1 ] + " started..." );
@@ -80,7 +79,10 @@ namespace VeeamTest
 
             #region Create Reader
 
-            Func< FileInfo, int, int, ThreadedReader > func = null;
+            Func< ThreadedReader.ThreadedReaderParameters, ThreadedReader > func = null;
+
+            #region Select reader func
+
             if ( currOperation.Equals( "decompress" ) )
             {
                 func = CreateDecompressReader;
@@ -89,6 +91,9 @@ namespace VeeamTest
             {
                 func = CreateCompressReader;
             }
+
+            #endregion
+
             Thread thread_Read = null;
             thread_Read = new Thread( () => StartReaders( args [ 1 ], func ) );
             thread_Read.IsBackground = true;
@@ -100,9 +105,8 @@ namespace VeeamTest
 
             #region Create Writer
 
-            _outFileWriter = new Writer( args [ 2 ], args [ 1 ] );
-            _outFileWriter.WorkerSupportsCancellation = true;
-            _outFileWriter.RunWorkerAsync();
+            outFileWriter = new Writer( args[ 2 ] );
+            outFileWriter.RunWorkerAsync();
 
             #endregion
 
@@ -110,12 +114,12 @@ namespace VeeamTest
             //wait for read and write ends
             if ( thread_Read != null)
             {
-                while( /*ThreadedReader.registeredReaders.Any(v=>!v.Finished)*/ thread_Read.IsAlive || _outFileWriter.GetQueueCount()>0 )
+                while( /*ThreadedReader.registeredReaders.Any(v=>!v.Finished)*/ thread_Read.IsAlive || outFileWriter.GetQueueCount()>0 )
                 {
                     Thread.Sleep( 10 );
                 }
             }
-            if( _outFileWriter .IsBusy) _outFileWriter.CancelAsync();
+            if( outFileWriter .IsBusy) outFileWriter.CancelAsync();
 
             return 0;
         }
@@ -123,37 +127,35 @@ namespace VeeamTest
 
 
 
-        static void StartReaders( object threadData, Func<FileInfo, int, int, ThreadedReader> func)
+        void StartReaders( object threadData, Func<ThreadedReader.ThreadedReaderParameters, ThreadedReader> func)
         {
             string pathToInputFile = ( string ) threadData;
             FileInfo inputFileInfo = new FileInfo( pathToInputFile );
-
             List<ThreadedReader> gZipThreads = new List< ThreadedReader >();
 
 
-            #region Divide input file to blocks
-
-            using ( var outFileStream = new FileStream( pathToInputFile, FileMode.Open, FileAccess.Read, FileShare.Read ) )
-            {
-                var writeBlockTotalCount = ( int )( outFileStream.Length / BufferSize ) + 1;
-                dataBlocks = new DataBlock [ writeBlockTotalCount ];
-                for ( int i = 0; i < dataBlocks.Length; i++ )
-                {
-                    dataBlocks [ i ] = new DataBlock();
-                }
-            }
-
-            #endregion
+            // Divide input file to blocks
+            ulong writeBlockTotalCount = ( ulong )( inputFileInfo.Length / BufferSize ) + 1;
             
-
-            #region Read input file by blocks with threads
-
+            // Read input file by blocks with threads
             for ( int i = 0; i < threadCount; i++ )
             {
-                if( func !=null) gZipThreads.Add( func.Invoke( inputFileInfo, threadCount, i ) );
+                if( func !=null)
+                {
+                    var newFuncParams = new ThreadedReader.ThreadedReaderParameters()
+                    {
+                        inputFileInfo = inputFileInfo,
+                        threadsCount = threadCount,
+                        threadIndex = i,
+                        iterationsTotalCount = writeBlockTotalCount,
+                        writer = outFileWriter,
+                        bufferSize = BufferSize
+                    };
+                    ThreadedReader reader = func.Invoke( newFuncParams );
+                    reader.RunWorkerAsync();
+                    gZipThreads.Add( reader );
+                }
             }
-
-            #endregion
 
 
             //wait for threads
@@ -170,17 +172,18 @@ namespace VeeamTest
             Console.WriteLine( " Read END" );*/
         }
 
+        #region Reader funcs
 
-
-
-        static DecompressReader CreateDecompressReader(FileInfo inputFileInfo, int threadCount, int i )
+        CompressReader CreateCompressReader ( ThreadedReader.ThreadedReaderParameters parameters )
         {
-            return new DecompressReader( inputFileInfo, threadCount, i );
+            return new CompressReader( parameters );
         }
-        static CompressReader CreateCompressReader ( FileInfo inputFileInfo, int threadCount, int i )
+        DecompressReader CreateDecompressReader ( ThreadedReader.ThreadedReaderParameters parameters )
         {
-            return new CompressReader( inputFileInfo, threadCount, i );
+            return new DecompressReader( parameters );
         }
+
+        #endregion
 
 
         #region Utils
