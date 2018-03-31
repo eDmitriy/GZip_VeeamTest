@@ -69,6 +69,7 @@ namespace VeeamTest
             catch ( Exception ex )
             {
                 Console.WriteLine( "Error is occured!\n Method: {0}\n Error description: {1}", ex.TargetSite, ex.Message );
+                Console.ReadKey();
                 return;
             }
 
