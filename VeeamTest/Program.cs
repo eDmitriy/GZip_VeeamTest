@@ -18,7 +18,12 @@ namespace VeeamTest
         private DateTime startTime;
         private string currOperation = "";
 
+
         private Writer outFileWriter = null;
+        private List<ThreadedReader> readers = new List< ThreadedReader >();
+
+        private ManualResetEvent[] readerDoneEvents = new ManualResetEvent[0];
+        private ManualResetEvent writerDoneEvent = new ManualResetEvent(false);
 
         #endregion
 
@@ -38,6 +43,17 @@ namespace VeeamTest
             Console.CancelKeyPress += new ConsoleCancelEventHandler( CancelKeyPress );
             ShowInfo();
 
+            #region CreateReaderEvents
+
+            readerDoneEvents = new ManualResetEvent [ threadCount ];
+            for ( int i = 0; i < threadCount; i++ )
+            {
+                readerDoneEvents[i] = new ManualResetEvent( false );
+            }
+
+            #endregion
+
+
             try
             {
                 #region Validation
@@ -49,12 +65,19 @@ namespace VeeamTest
 
                 startTime = DateTime.Now;
                 CreateWorkers( args );
+
+                //wait for read and write queue ends
+                WaitHandle.WaitAll( readerDoneEvents );
+                writerDoneEvent.WaitOne();
+
+                //cancel writer process if still exists
+                if ( outFileWriter.IsBusy ) outFileWriter.CancelAsync();
             }
 
             catch ( Exception ex )
             {
                 Console.WriteLine( "Error is occured!\n Method: {0}\n Error description: {1}", ex.TargetSite, ex.Message );
-                //return 1;
+                return;
             }
 
 
@@ -81,6 +104,7 @@ namespace VeeamTest
 
             Func< ThreadedReader.ThreadedReaderParameters, ThreadedReader > func = null;
 
+
             #region Select reader func
 
             if ( currOperation.Equals( "decompress" ) )
@@ -97,29 +121,20 @@ namespace VeeamTest
             Thread thread_Read = null;
             thread_Read = new Thread( () => StartReaders( args [ 1 ], func ) );
             thread_Read.IsBackground = true;
-
             thread_Read.Start();
 
             #endregion
 
 
+
             #region Create Writer
 
-            outFileWriter = new Writer( args[ 2 ] );
+            outFileWriter = new Writer( args[ 2 ], writerDoneEvent );
             outFileWriter.RunWorkerAsync();
 
             #endregion
 
 
-            //wait for read and write ends
-            if ( thread_Read != null)
-            {
-                while( /*ThreadedReader.registeredReaders.Any(v=>!v.Finished)*/ thread_Read.IsAlive || outFileWriter.GetQueueCount()>0 )
-                {
-                    Thread.Sleep( 10 );
-                }
-            }
-            if( outFileWriter .IsBusy) outFileWriter.CancelAsync();
 
             return 0;
         }
@@ -131,12 +146,11 @@ namespace VeeamTest
         {
             string pathToInputFile = ( string ) threadData;
             FileInfo inputFileInfo = new FileInfo( pathToInputFile );
-            List<ThreadedReader> gZipThreads = new List< ThreadedReader >();
-
 
             // Divide input file to blocks
             ulong writeBlockTotalCount = ( ulong )( inputFileInfo.Length / BufferSize ) + 1;
             
+
             // Read input file by blocks with threads
             for ( int i = 0; i < threadCount; i++ )
             {
@@ -149,28 +163,25 @@ namespace VeeamTest
                         threadIndex = i,
                         iterationsTotalCount = writeBlockTotalCount,
                         writer = outFileWriter,
-                        bufferSize = BufferSize
+                        bufferSize = BufferSize,
+                        doneEvent = readerDoneEvents[i]
                     };
                     ThreadedReader reader = func.Invoke( newFuncParams );
                     reader.RunWorkerAsync();
-                    gZipThreads.Add( reader );
+                    readers.Add( reader );
                 }
             }
-
-
+            
             //wait for threads
-            while ( gZipThreads.Any(v=>!v.Finished) )
-            {
-                Thread.Sleep( 100 );
-            }
+            WaitHandle.WaitAll( readerDoneEvents );
 
-            gZipThreads.Clear();
+            readers.Clear();
             GC.Collect();
 
-
-/*            Console.WriteLine( "" );
-            Console.WriteLine( " Read END" );*/
+            //Console.WriteLine( "\n Read END" );
         }
+
+
 
         #region Reader funcs
 
@@ -207,14 +218,6 @@ namespace VeeamTest
             }
         }
 
-
-        public static void ClearCurrentConsoleLine ()
-        {
-            int currentLineCursor = Console.CursorTop;
-            Console.SetCursorPosition( 0, Console.CursorTop );
-            Console.Write( new string( ' ', Console.WindowWidth ) );
-            Console.SetCursorPosition( 0, currentLineCursor );
-        }
 
         #endregion
 

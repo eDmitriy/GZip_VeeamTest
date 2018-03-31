@@ -19,6 +19,8 @@ namespace VeeamTest
             public int threadIndex;
             public int threadsCount;
             public long bufferSize;
+
+            public ManualResetEvent doneEvent;
         }
 
         protected Thread thread;
@@ -89,49 +91,54 @@ namespace VeeamTest
         /// </summary>
         void Loop ( object sender, DoWorkEventArgs e )
         {
-            if ( Thread.CurrentThread.Name == null )
-                Thread.CurrentThread.Name = "ThreadedReader_" + parameters.threadIndex;
-
-
-            using ( var readFileStream = new FileStream( parameters.inputFileInfo.FullName,
-                FileMode.Open, FileAccess.Read, FileShare.Read ) )
+            try
             {
+                //Thread name
+                if ( Thread.CurrentThread.Name == null )
+                    Thread.CurrentThread.Name = "ThreadedReader_" + parameters.threadIndex;
 
-                for ( ulong i = ( ulong )parameters.threadIndex; i < parameters.iterationsTotalCount; i += ( ulong )parameters.threadsCount )
+
+
+                using ( var readFileStream = new FileStream( parameters.inputFileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.Read ) )
                 {
-                    AddDataBlocksToWriterQueue( ReadDataBlocks( readFileStream, i ) );
-
-
-                    lock ( progresLogLocker )
+                    for ( ulong i = ( ulong )parameters.threadIndex; i < parameters.iterationsTotalCount; i += ( ulong )parameters.threadsCount )
                     {
-                        Program.ClearCurrentConsoleLine();
-                        Console.Write( "-%" 
-                            + ( ( ( float )i / ( float )parameters.iterationsTotalCount ) * 100 ).ToString( "F" ) 
-                            + ".  index = " + i );
+                        AddDataBlocksToWriterQueue(
+                            ReadDataBlocks( readFileStream, i ),
+                            i
+                        );
+
+                        ProgressBar( i );
                     }
+
+                    Finished = true;
+                    parameters.doneEvent.Set();
+                    //Console.WriteLine( "\n\n ThrReader #-"+threadIndex + " finished! \n\n");
                 }
-
-                Finished = true;
-                //Console.WriteLine( "\n\n ThrReader #-"+threadIndex + " finished! \n\n");
             }
+            catch( Exception exception )
+            {
+                Console.WriteLine( exception.Message );
+                //throw;
+            }
+            
         }
+        
 
+        
 
-
-
-        #region Basic Methods
+        #region BaseMethods
 
         protected virtual List<DataBlock> ReadDataBlocks ( FileStream readFileStream, ulong index )
         {
             DataBlock newDataBlock = new DataBlock();
             newDataBlock.ByteData = ReadFileBlockFromStream( readFileStream, index );
-            newDataBlock.startIndex = (long)index * newDataBlock.ByteData.Length;
+            newDataBlock.startIndex = ( long )index * newDataBlock.ByteData.Length;
 
-            return new List< DataBlock >(){newDataBlock};
+            return new List<DataBlock>() { newDataBlock };
         }
 
-
-        protected virtual byte[] ReadFileBlockFromStream ( FileStream readFileStream, ulong index )
+        protected virtual byte [] ReadFileBlockFromStream ( FileStream readFileStream, ulong index )
         {
             byte[] buffer = new byte [ parameters.bufferSize ];
 
@@ -149,8 +156,7 @@ namespace VeeamTest
             return buffer;
         }
 
-
-        protected void AddDataBlocksToWriterQueue( List< DataBlock > dataBlocks )
+        protected void AddDataBlocksToWriterQueue( List< DataBlock > dataBlocks, ulong loopIndex )
         {
             if( parameters.writer==null) return;
 
@@ -163,20 +169,56 @@ namespace VeeamTest
                     Monitor.Wait( parameters.writer );
                 }
 
+
+                #region WriterInteraction
+
                 //add blocks to write queue
                 foreach ( DataBlock dataBlock in dataBlocks )
                 {
-                    //DataBlockToWriteQueue( dataBlock );
-                    if ( parameters.writer != null ) parameters.writer.EnqueueDataBlocks( dataBlock );
+                    parameters.writer.EnqueueDataBlocks( dataBlock );
                 }
+
+                //signals to writer to exit on last write item
+                if ( loopIndex >= parameters.iterationsTotalCount-1 )
+                {
+                    parameters.writer.ExitOnQueueEnds = true;
+                }
+
+                #endregion
+
 
                 IncreaseNextWriteThreadIndex();
                 Monitor.PulseAll( parameters.writer );
             }
         }
 
+
+
         #endregion
 
+
+        #region Utils
+
+        void ProgressBar ( ulong i )
+        {
+            lock ( progresLogLocker )
+            {
+                ClearCurrentConsoleLine();
+                Console.Write( "-%"
+                               + ( ( ( float )i / ( float )parameters.iterationsTotalCount ) * 100 ).ToString( "F" )
+                               + ".  index = " + i );
+            }
+        }
+
+        void ClearCurrentConsoleLine ()
+        {
+            int currentLineCursor = Console.CursorTop;
+            Console.SetCursorPosition( 0, Console.CursorTop );
+            Console.Write( new string( ' ', Console.WindowWidth ) );
+            Console.SetCursorPosition( 0, currentLineCursor );
+        }
+
+        #endregion
 
     }
 

@@ -20,35 +20,51 @@ namespace VeeamTest
 
         public void DeCompressDataBlock (byte[] bytes,  long startIndex)
         {
-            using ( MemoryStream mStreamOrigFile = new MemoryStream( bytes ) )
+            try
             {
-                mStreamOrigFile.Position = startIndex;
-
-                using ( MemoryStream mStream = new MemoryStream() )
+                using ( MemoryStream mStreamOrigFile = new MemoryStream( bytes ) )
                 {
-                    using ( GZipStream gZipStream = new GZipStream( mStreamOrigFile, CompressionMode.Decompress ) )
+                    mStreamOrigFile.Position = startIndex;
+
+                    using ( MemoryStream mStream = new MemoryStream() )
                     {
-                        gZipStream.CopyTo( mStream );
+                        using ( GZipStream gZipStream = new GZipStream( mStreamOrigFile, CompressionMode.Decompress ) )
+                        {
+                            gZipStream.CopyTo( mStream );
+                        }
+                        ByteData = mStream.ToArray();
                     }
-                    ByteData = mStream.ToArray();
                 }
             }
+            catch( Exception e )
+            {
+                Console.WriteLine("\n Decompression of block at "+ startIndex +" Failed!: " +e.Message);
+            }
+
         }
 
 
 
         public void CompressDataBlock ( byte [] bytes )
         {
-            using ( MemoryStream mStream = new MemoryStream() )
+            try
             {
-                using ( GZipStream gZipStream = new GZipStream( mStream, CompressionMode.Compress ) )
+                using ( MemoryStream mStream = new MemoryStream() )
                 {
-                    gZipStream.Write( bytes, 0, bytes.Length );
+                    using ( GZipStream gZipStream = new GZipStream( mStream, CompressionMode.Compress ) )
+                    {
+                        gZipStream.Write( bytes, 0, bytes.Length );
+                    }
+                    ByteData = mStream.ToArray();
                 }
-                ByteData = mStream.ToArray();
-
-                //return ( ulong )ByteData.Length;
             }
+            catch( Exception e )
+            {
+                Console.WriteLine( "\n Compression of block at " + startIndex + " Failed!: " + e.Message );
+                //throw;
+            }
+
+
         }
 
 

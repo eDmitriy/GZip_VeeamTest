@@ -11,11 +11,14 @@ namespace VeeamTest
     public class Writer : BackgroundWorker
     {
         #region Vars
-
+        public static List<long> writedIndexes = new List< long >();
         private Queue<DataBlock> dataBlocksQueue = new Queue< DataBlock >();
         private string newFileName;
+        
+        private ManualResetEvent loopWait = new ManualResetEvent( false );
+        private ManualResetEvent doneEvent;
 
-        public static List<long> writedIndexes = new List< long >();
+        public bool ExitOnQueueEnds { get; set; } = false;
 
         #endregion
 
@@ -23,9 +26,10 @@ namespace VeeamTest
 
         #region Constructor
 
-        public Writer ( string newFileName )
+        public Writer ( string newFileName, ManualResetEvent doneEvent )
         {
             this.newFileName = newFileName;
+            this.doneEvent = doneEvent;
 
             WorkerSupportsCancellation = true;
             DoWork += WriteDataBlocksToOutputFile;
@@ -55,13 +59,16 @@ namespace VeeamTest
 
                 #endregion
 
-                //wait for queue writing
+                //wait for queue writing to prevent huge memory usage
                 while ( GetQueueCount() >4  )
                 {
                     Monitor.Wait( dataBlocksQueue );
                 }
 
                 dataBlocksQueue.Enqueue( dataBlock );
+
+                //reset writing loop if it in Waitng state
+                loopWait.Set();
             }
         }
 
@@ -70,56 +77,80 @@ namespace VeeamTest
             return dataBlocksQueue.Count;
         }
 
+/*        public void ExitOnQueueEnd()
+        {
+            ExitOnQueueEnds = true;
+        }*/
+
         #endregion
 
 
 
-
+        /// <summary>
+        /// Infinite writing loop
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         void WriteDataBlocksToOutputFile ( object sender, DoWorkEventArgs e )
         {
-            if ( Thread.CurrentThread.Name == null ) Thread.CurrentThread.Name = "ThreadedWriter";
-            FileInfo outFileInfo = new FileInfo( newFileName );
-
-            //write every dataBlock continuously or wait for dataBlock become ready
-            using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
+            try
             {
-                //outFileStream.Lock( 0, dataBlocks.Length * BufferSize );
-                DataBlock dataBlock = null;
+                if ( Thread.CurrentThread.Name == null ) Thread.CurrentThread.Name = "ThreadedWriter";
+                FileInfo outFileInfo = new FileInfo( newFileName );
 
-                while ( true )
+                //write every dataBlock continuously or wait for dataBlock become ready
+                using ( FileStream outFileStream = File.Create( outFileInfo.FullName ) )
                 {
-                    //wait dataBlock for write 
-                    while ( GetQueueCount()==0 )
+                    //outFileStream.Lock( 0, dataBlocks.Length * BufferSize );
+                    DataBlock dataBlock = null;
+
+                    while ( true )
                     {
-                        Thread.Sleep( 10 );
+                        //wait dataBlock for write 
+                        while ( GetQueueCount() == 0 )
+                        {
+                            if ( ExitOnQueueEnds )
+                            {
+                                doneEvent.Set();
+                                return;
+                            }
+
+                            //Thread.Sleep( 10 );
+                            loopWait.Reset();
+                            loopWait.WaitOne();
+                        }
+
+
+                        #region Dequeue
+
+                        lock ( dataBlocksQueue )
+                        {
+                            dataBlock = dataBlocksQueue.Dequeue();
+                            Monitor.PulseAll( dataBlocksQueue );
+                        }
+                        if ( dataBlock == null || dataBlock.ByteData == null || dataBlock.ByteData.Length == 0 ) continue;
+
+                        #endregion
+
+
+                        //write
+                        outFileStream.Write( dataBlock.ByteData, 0, dataBlock.ByteData.Length );
+
+
+                        dataBlock.ByteData = new byte [ 0 ];
+                        lock ( writedIndexes ) writedIndexes.Add( dataBlock.startIndex );
+                        //Console.Write( " -W " /*+ ++counter*/+ dataBlock.startIndex.ToString("C0") );
                     }
 
-
-                    #region Dequeue
-
-                    lock ( dataBlocksQueue )
-                    {
-                        dataBlock = dataBlocksQueue.Dequeue();
-                        Monitor.PulseAll( dataBlocksQueue );
-                    }
-                    if ( dataBlock==null || dataBlock.ByteData==null || dataBlock.ByteData.Length==0) continue;
-
-                    #endregion
-
-
-                    //write
-                    outFileStream.Write( dataBlock.ByteData, 0, dataBlock.ByteData.Length );
-
-
-                    dataBlock.ByteData = new byte [ 0 ];
-                    lock ( writedIndexes ) writedIndexes.Add( dataBlock.startIndex );
-                    //Console.Write( " -W " /*+ ++counter*/+ dataBlock.startIndex.ToString("C0") );
                 }
-
             }
+            catch( Exception exception )
+            {
+                Console.WriteLine( exception.Message );
+                //throw;
+            }
+
         }
-
-
-
+        
     }
 }
