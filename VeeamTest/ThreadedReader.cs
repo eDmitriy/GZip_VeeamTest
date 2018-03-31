@@ -22,14 +22,9 @@ namespace VeeamTest
 
             public ManualResetEvent doneEvent;
         }
-
-        protected Thread thread;
         protected ThreadedReaderParameters parameters;
 
-
-        public bool Finished { get; set; }
-
-        public static List<ThreadedReader> registeredReaders = new List< ThreadedReader >();
+        private bool Finished { get; set; }
 
         
         #region NextWriteThreadIndex
@@ -61,6 +56,7 @@ namespace VeeamTest
 
         #endregion
 
+        static List<ThreadedReader> registeredReaders = new List< ThreadedReader >();
         static object progresLogLocker = new object();
 
         #endregion

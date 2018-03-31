@@ -14,12 +14,13 @@ namespace VeeamTest
 
         private int threadCount = Environment.ProcessorCount;
         private readonly long BufferSize = 1024*1024;
+        private const ulong maxMemoryPerThread = 1024 * 1024 * 100; //100mb
 
         private DateTime startTime;
         private string currOperation = "";
 
 
-        private Writer outFileWriter = null;
+        private Writer writer = null;
         private List<ThreadedReader> readers = new List< ThreadedReader >();
 
         private ManualResetEvent[] readerDoneEvents = new ManualResetEvent[0];
@@ -52,26 +53,17 @@ namespace VeeamTest
             }
 
             #endregion
-
-
+            
             try
             {
-                #region Validation
-
-                Validation.HardwareValidation();
+                // Validation
+                Validation.HardwareValidation((ulong)threadCount, maxMemoryPerThread );
                 Validation.StringReadValidation( args );
 
-                #endregion
-
                 startTime = DateTime.Now;
+
                 CreateWorkers( args );
-
-                //wait for read and write queue ends
-                WaitHandle.WaitAll( readerDoneEvents );
-                writerDoneEvent.WaitOne();
-
-                //cancel writer process if still exists
-                if ( outFileWriter.IsBusy ) outFileWriter.CancelAsync();
+                WaitForProcessDone();
             }
 
             catch ( Exception ex )
@@ -80,32 +72,31 @@ namespace VeeamTest
                 return;
             }
 
-
-            #region Result
-
-            Console.WriteLine( string.Format( "\nCompleted in {0} seconds", ( DateTime.Now - startTime ).TotalSeconds ) );
-            Console.WriteLine( "\nHeaders found = " + DecompressReader.headersFound.Count );
-            Console.WriteLine( "Writes count = " + Writer.writedIndexes.Count );
-
-            #endregion
-
-            Console.WriteLine( "\nPress any key to exit!" );
-            Console.ReadKey();
+            ShowSuccesResult();
+            GC.Collect();
         }
 
-        
+
+
         int CreateWorkers( string[] args )
         {
             currOperation = args[ 0 ].ToLower();
             Console.WriteLine( "\n\n"+currOperation + "ion of " + args [ 1 ] + " started..." );
+            
+            //create writer
+            writer = new Writer( args [ 2 ], writerDoneEvent );
+            writer.RunWorkerAsync();
+
+            //create reader
+            SelectReaderType( args );
+
+            return 0;
+        }
 
 
-            #region Create Reader
-
+        void SelectReaderType(string[] args)
+        {
             Func< ThreadedReader.ThreadedReaderParameters, ThreadedReader > func = null;
-
-
-            #region Select reader func
 
             if ( currOperation.Equals( "decompress" ) )
             {
@@ -115,36 +106,12 @@ namespace VeeamTest
             {
                 func = CreateCompressReader;
             }
-
-            #endregion
-
-            Thread thread_Read = null;
-            thread_Read = new Thread( () => StartReaders( args [ 1 ], func ) );
-            thread_Read.IsBackground = true;
-            thread_Read.Start();
-
-            #endregion
-
-
-
-            #region Create Writer
-
-            outFileWriter = new Writer( args[ 2 ], writerDoneEvent );
-            outFileWriter.RunWorkerAsync();
-
-            #endregion
-
-
-
-            return 0;
+            
+            StartReaders( args[ 1 ], func );
         }
 
-
-
-
-        void StartReaders( object threadData, Func<ThreadedReader.ThreadedReaderParameters, ThreadedReader> func)
+        void StartReaders( string pathToInputFile, Func<ThreadedReader.ThreadedReaderParameters, ThreadedReader> func)
         {
-            string pathToInputFile = ( string ) threadData;
             FileInfo inputFileInfo = new FileInfo( pathToInputFile );
 
             // Divide input file to blocks
@@ -162,24 +129,47 @@ namespace VeeamTest
                         threadsCount = threadCount,
                         threadIndex = i,
                         iterationsTotalCount = writeBlockTotalCount,
-                        writer = outFileWriter,
+                        writer = writer,
                         bufferSize = BufferSize,
                         doneEvent = readerDoneEvents[i]
                     };
                     ThreadedReader reader = func.Invoke( newFuncParams );
-                    reader.RunWorkerAsync();
                     readers.Add( reader );
+                    reader.RunWorkerAsync();
                 }
             }
             
             //wait for threads
-            WaitHandle.WaitAll( readerDoneEvents );
+/*            WaitHandle.WaitAll( readerDoneEvents );
 
             readers.Clear();
-            GC.Collect();
+            GC.Collect();*/
 
             //Console.WriteLine( "\n Read END" );
         }
+
+
+
+        void WaitForProcessDone()
+        {
+            //wait for read and write queue ends
+            WaitHandle.WaitAll( readerDoneEvents );
+            writerDoneEvent.WaitOne();
+
+            //cancel writer process if still exists
+            //if ( outFileWriter.IsBusy ) outFileWriter.CancelAsync();
+        }
+
+        void ShowSuccesResult()
+        {
+            Console.WriteLine( string.Format( "\nCompleted in {0} seconds", ( DateTime.Now - startTime ).TotalSeconds ) );
+            //Console.WriteLine( "\nHeaders found = " + DecompressReader.headersFound.Count );
+            Console.WriteLine( "Writes count = " + Writer.writedIndexes.Count );
+            
+            Console.WriteLine( "\nPress any key to exit!" );
+            Console.ReadKey();
+        }
+
 
 
 
@@ -199,7 +189,7 @@ namespace VeeamTest
 
         #region Utils
 
-        static void ShowInfo ()
+        void ShowInfo ()
         {
             Console.WriteLine( "To zip or unzip files please proceed with the following pattern to type in:\n" +
                                "Zipping: GZipTest.exe compress [Source file path] [Destination file path]\n" +
@@ -208,12 +198,23 @@ namespace VeeamTest
         }
 
 
-        static void CancelKeyPress ( object sender, ConsoleCancelEventArgs _args )
+        void CancelKeyPress ( object sender, ConsoleCancelEventArgs _args )
         {
             if ( _args.SpecialKey == ConsoleSpecialKey.ControlC )
             {
                 Console.WriteLine( "\nCancelling..." );
                 _args.Cancel = true;
+
+                //cancell readers
+                foreach ( var r in readers )
+                {
+                    if(r.IsBusy) r.CancelAsync();
+                }
+
+                //cancell writer
+                if( writer.IsBusy) writer.CancelAsync();
+
+                //close application
                 Environment.Exit( 1 );
             }
         }

@@ -18,7 +18,17 @@ namespace VeeamTest
         private ManualResetEvent loopWait = new ManualResetEvent( false );
         private ManualResetEvent doneEvent;
 
-        public bool ExitOnQueueEnds { get; set; } = false;
+
+        private bool exitOnQueueEnds = false;
+        public bool ExitOnQueueEnds
+        {
+            get { return exitOnQueueEnds; }
+            set
+            {
+                exitOnQueueEnds = value;
+                loopWait.Set();
+            }
+        }
 
         #endregion
 
