@@ -14,6 +14,7 @@ namespace VeeamTest
         public static List<long> writedIndexes = new List< long >();
         private Queue<DataBlock> dataBlocksQueue = new Queue< DataBlock >();
         private string newFileName;
+        private int maxQueueCount = 4;
         
         private ManualResetEvent loopWait = new ManualResetEvent( false );
         private ManualResetEvent doneEvent;
@@ -36,10 +37,11 @@ namespace VeeamTest
 
         #region Constructor
 
-        public Writer ( string newFileName, ManualResetEvent doneEvent )
+        public Writer ( string newFileName, ManualResetEvent doneEvent, int maxQueueCount )
         {
             this.newFileName = newFileName;
             this.doneEvent = doneEvent;
+            this.maxQueueCount = maxQueueCount;
 
             WorkerSupportsCancellation = true;
             DoWork += WriteDataBlocksToOutputFile;
@@ -70,7 +72,7 @@ namespace VeeamTest
                 #endregion
 
                 //wait for queue writing to prevent huge memory usage
-                while ( GetQueueCount() >4  )
+                while ( GetQueueCount() > maxQueueCount )
                 {
                     Monitor.Wait( dataBlocksQueue );
                 }

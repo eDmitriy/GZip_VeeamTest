@@ -85,7 +85,7 @@ namespace VeeamTest
             Console.WriteLine( "\n\n"+currOperation + "ion of " + args [ 1 ] + " started..." );
             
             //create writer
-            writer = new Writer( args [ 2 ], writerDoneEvent );
+            writer = new Writer( args [ 2 ], writerDoneEvent, threadCount );  //writer maxQueueCount is equal to threads count
             writer.RunWorkerAsync();
 
             //create reader
